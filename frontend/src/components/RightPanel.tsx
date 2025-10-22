@@ -23,23 +23,33 @@ interface RightPanelProps {
   segments: Segment[]
   activeSegIndex: number | null
   autoScroll: boolean
+  savedSummaries?: Summary[]
   onSeekTo: (timeMs: number) => void
   onActiveSegmentChange: (index: number) => void
   onAutoScrollChange: (enabled: boolean) => void
 }
 
 const RightPanel = forwardRef<HTMLDivElement, RightPanelProps>(
-  ({ 
-    segments, 
-    activeSegIndex, 
-    autoScroll, 
-    onSeekTo, 
-    onActiveSegmentChange, 
-    onAutoScrollChange 
+  ({
+    segments,
+    activeSegIndex,
+    autoScroll,
+    savedSummaries = [],
+    onSeekTo,
+    onActiveSegmentChange,
+    onAutoScrollChange
   }, ref: ForwardedRef<HTMLDivElement>) => {
     const [summaries, setSummaries] = useState<Summary[]>([])
     const [summariesLoading, setSummariesLoading] = useState(false)
     const [summariesError, setSummariesError] = useState<string | null>(null)
+
+    // 当 savedSummaries 变化时，更新 summaries
+    React.useEffect(() => {
+      if (savedSummaries && savedSummaries.length > 0) {
+        setSummaries(savedSummaries)
+        setSummariesError(null)
+      }
+    }, [savedSummaries])
 
     const handleGenerateSummary = async () => {
       setSummariesError(null)

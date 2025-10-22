@@ -9,10 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from config import get_config, load_config
-from backend.db.pg_store import init_db, claim_next_pending_job, finish_job_success, finish_job_failed
+from backend.db.pg_store import init_db, claim_next_pending_job, finish_job_success, finish_job_failed, save_summaries
 from backend.utils.vedio_utils.download_video.download_bilibili import download_bilibili
 from backend.audio2text.asr_sentence_segments import process as asr_process
 from backend.routers.media import router as media_router
+from backend.routers.knowledge import router as knowledge_router
 
 
 
@@ -67,57 +68,167 @@ app.state.db_url = db_url
 
 # 注册路由
 app.include_router(media_router)
+app.include_router(knowledge_router)
 
 
-# 启动后台worker：简单串行处理下载+ASR，避免阻塞请求线程
+# 启动后台worker：简单串行处理下载+ASR+摘要，避免阻塞请求线程
 def _job_worker(app: FastAPI) -> None:
     import time
+    import logging
     from pathlib import Path
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("job_worker")
+
     static_dir: Path = app.state.static_dir
     while True:
         job = claim_next_pending_job(db_url)
         if not job:
             time.sleep(1.0)
             continue
-        job_id = int(job["id"])  
-        url = str(job["url"])   
+        job_id = int(job["id"])
+        url = str(job["url"])
+        logger.info(f"开始处理任务 #{job_id}: {url}")
         try:
             # 读取当前任务的 result，用于阶段性恢复
             from backend.db.pg_store import get_job, update_job_result, save_transcript  # 局部导入避免循环
+            from backend.text_process.summarize import summarize_segments
+            from config import get_config
+            import os
+
             info = get_job(db_url, job_id) or {}
             res = dict(info.get("result") or {})
 
             # Step A: 下载阶段（若无 media_path 或文件不存在，则执行下载并写入进度）
             media_path = res.get("media_path")
             if not media_path or not Path(str(media_path)).exists():
+                logger.info(f"任务 #{job_id}: 开始下载视频...")
+                update_job_result(db_url, job_id, {"progress": 10, "stage": "下载视频中..."})
                 files = download_bilibili(url=url, out_dir=str(static_dir), use_nopart=True, simple_filename=True)
                 if not files:
                     raise RuntimeError("下载结果为空")
                 media_path = str(Path(files[0]).resolve())
                 basename = Path(media_path).name
+                logger.info(f"任务 #{job_id}: 视频下载完成: {basename}")
                 res.update({
                     "media_path": media_path,
                     "basename": basename,
                     "static_url": f"/static/{basename}",
+                    "progress": 30,
+                    "stage": "下载完成"
                 })
                 update_job_result(db_url, job_id, {
                     "media_path": media_path,
                     "basename": basename,
                     "static_url": f"/static/{basename}",
+                    "progress": 30,
+                    "stage": "下载完成"
                 })
             else:
                 basename = Path(str(media_path)).name
+                logger.info(f"任务 #{job_id}: 使用已下载的视频: {basename}")
 
             # Step B: ASR 阶段（若无 transcript_id，则执行识别与保存）
             if not res.get("transcript_id"):
+                logger.info(f"任务 #{job_id}: 开始语音识别...")
+                update_job_result(db_url, job_id, {"progress": 40, "stage": "语音识别中..."})
                 segs = asr_process(str(media_path))
+                logger.info(f"任务 #{job_id}: 识别完成，共 {len(segs)} 个分句")
                 transcript_id = save_transcript(db_url, str(media_path), segs)
-                res.update({"transcript_id": transcript_id})
-                update_job_result(db_url, job_id, {"transcript_id": transcript_id})
+                logger.info(f"任务 #{job_id}: 转写记录已保存，ID={transcript_id}")
+                res.update({"transcript_id": transcript_id, "segments": segs, "progress": 70, "stage": "语音识别完成"})
+                update_job_result(db_url, job_id, {"transcript_id": transcript_id, "progress": 70, "stage": "语音识别完成"})
+            else:
+                # 如果已有 transcript_id，需要读取 segments
+                from backend.db.pg_store import get_transcript_by_id
+                transcript_data = get_transcript_by_id(db_url, res.get("transcript_id"))
+                segs = transcript_data.get("segments", []) if transcript_data else []
+                res["segments"] = segs
+                logger.info(f"任务 #{job_id}: 使用已有转写记录 ID={res.get('transcript_id')}, {len(segs)} 个分句")
 
-            # Step C: 完成任务（写入完整结果）
+            # Step C: 生成摘要（若无 summaries，则执行摘要生成）
+            if not res.get("summaries") and segs:
+                logger.info(f"任务 #{job_id}: 开始生成摘要...")
+                update_job_result(db_url, job_id, {"progress": 80, "stage": "生成摘要中..."})
+                try:
+                    cfg = get_config()
+                    api_key = cfg.OPENAI_API_KEY or os.environ.get("OPENAI_API_KEY")
+                    base_url = cfg.OPENAI_BASE_URL or os.environ.get("OPENAI_BASE_URL")
+                    model = cfg.OPENAI_CHAT_MODEL or os.environ.get("OPENAI_CHAT_MODEL")
+
+                    # 从配置或环境读取 CHAT_MAX_WINDOWS
+                    chat_max = None
+                    if hasattr(cfg, 'CHAT_MAX_WINDOWS') and cfg.CHAT_MAX_WINDOWS:
+                        try:
+                            chat_max = int(cfg.CHAT_MAX_WINDOWS)
+                        except Exception:
+                            chat_max = None
+                    if chat_max is None:
+                        try:
+                            chat_max = int(os.environ.get('CHAT_MAX_WINDOWS') or '1000000')
+                        except Exception:
+                            chat_max = 1000000
+
+                    if api_key and base_url and model:
+                        logger.info(f"任务 #{job_id}: 调用 LLM 生成摘要...")
+                        summaries = summarize_segments(
+                            segments=segs,
+                            api_key=api_key,
+                            base_url=base_url,
+                            model=model,
+                            chat_max_windows=chat_max,
+                        )
+                        logger.info(f"任务 #{job_id}: 摘要生成完成，共 {len(summaries)} 条")
+                        # 保存摘要到专门的 summaries 表
+                        transcript_id = res.get("transcript_id")
+                        if transcript_id:
+                            logger.info(f"任务 #{job_id}: 保存摘要到数据库...")
+                            summary_id = save_summaries(db_url, transcript_id, summaries)
+                            logger.info(f"任务 #{job_id}: 摘要已保存到数据库，summary_id={summary_id}")
+                            res.update({"summaries": summaries, "summary_id": summary_id, "progress": 95, "stage": "摘要生成完成"})
+                            update_job_result(db_url, job_id, {"summaries": summaries, "summary_id": summary_id, "progress": 95, "stage": "摘要生成完成"})
+                        else:
+                            logger.warning(f"任务 #{job_id}: 没有 transcript_id，摘要未保存到库")
+                            res.update({"summaries": summaries, "progress": 95, "stage": "摘要生成完成（未保存到库）"})
+                            update_job_result(db_url, job_id, {"summaries": summaries, "progress": 95, "stage": "摘要生成完成（未保存到库）"})
+                    else:
+                        logger.warning(f"任务 #{job_id}: 未配置 API，跳过摘要生成")
+                        res.update({"progress": 95, "stage": "跳过摘要生成（未配置API）"})
+                        update_job_result(db_url, job_id, {"progress": 95, "stage": "跳过摘要生成（未配置API）"})
+                except Exception as e:
+                    # 摘要生成失败不影响整体流程
+                    logger.error(f"任务 #{job_id}: 摘要生成失败: {e}", exc_info=True)
+                    res.update({"progress": 95, "stage": f"摘要生成失败: {str(e)}"})
+                    update_job_result(db_url, job_id, {"progress": 95, "stage": f"摘要生成失败: {str(e)}"})
+
+            # Step D: 同步到向量库（可选，如果转写和摘要都完成）
+            if res.get("transcript_id") and res.get("summaries"):
+                try:
+                    logger.info(f"任务 #{job_id}: 开始同步到向量库...")
+                    from backend.knowledge.knowledge_service import sync_transcript_to_vector_db
+                    # 使用与pyvideotrans共享的向量库路径
+                    vector_db_dir = r"F:\智能体定制\20250904translateVideo\shared_vector_db"
+                    sync_success = sync_transcript_to_vector_db(
+                        db_url=db_url,
+                        transcript_id=res.get("transcript_id"),
+                        persist_directory=vector_db_dir
+                    )
+                    if sync_success:
+                        logger.info(f"任务 #{job_id}: 成功同步到向量库")
+                        res.update({"vector_synced": True})
+                    else:
+                        logger.warning(f"任务 #{job_id}: 向量库同步失败")
+                        res.update({"vector_synced": False})
+                except Exception as e:
+                    logger.error(f"任务 #{job_id}: 向量库同步出错: {e}", exc_info=True)
+                    res.update({"vector_synced": False, "vector_sync_error": str(e)})
+
+            # Step E: 完成任务（写入完整结果）
+            res.update({"progress": 100, "stage": "处理完成"})
             finish_job_success(db_url, job_id, res)
+            logger.info(f"任务 #{job_id}: 处理完成")
         except Exception as e:
+            logger.error(f"任务 #{job_id}: 处理失败: {e}", exc_info=True)
             finish_job_failed(db_url, job_id, str(e))
 
 

@@ -45,7 +45,7 @@ def init_db(db_url: Optional[str] = None) -> None:
     conn_params = _ensure_conn_params(db_url)
     max_retries = 30  # 最多重试30次
     retry_delay = 2   # 每次重试间隔2秒
-    
+
     conn = None
     for attempt in range(max_retries):
         try:
@@ -67,7 +67,7 @@ def init_db(db_url: Optional[str] = None) -> None:
             else:
                 # 其他类型的连接错误，直接抛出
                 raise
-    
+
     if conn is None:
         raise RuntimeError("无法建立数据库连接")
 
@@ -100,6 +100,17 @@ def init_db(db_url: Optional[str] = None) -> None:
                 )
                 cur.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS summaries (
+                        id SERIAL PRIMARY KEY,
+                        transcript_id INTEGER NOT NULL,
+                        summaries_json TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT (now()),
+                        FOREIGN KEY (transcript_id) REFERENCES transcripts(id) ON DELETE CASCADE
+                    );
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_jobs_status_created
                     ON jobs(status, created_at DESC);
                     """
@@ -108,6 +119,12 @@ def init_db(db_url: Optional[str] = None) -> None:
                     """
                     CREATE INDEX IF NOT EXISTS idx_transcripts_media_path
                     ON transcripts(media_path);
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_summaries_transcript_id
+                    ON summaries(transcript_id);
                     """
                 )
     finally:
@@ -508,5 +525,113 @@ def update_job_result(db_url: Optional[str], job_id: int, patch: Dict[str, Any],
                         "UPDATE jobs SET result_json = %s WHERE id = %s",
                         (json.dumps(current, ensure_ascii=False), int(job_id)),
                     )
+    finally:
+        conn.close()
+
+
+def save_summaries(db_url: Optional[str], transcript_id: int, summaries: List[Dict[str, Any]]) -> int:
+    """保存摘要到 summaries 表。
+    返回: 新创建的摘要记录 id
+    """
+    import logging
+    logger = logging.getLogger("pg_store")
+
+    conn_params = _ensure_conn_params(db_url)
+    data = json.dumps(summaries, ensure_ascii=False)
+    logger.info(f"准备保存摘要: transcript_id={transcript_id}, 摘要数量={len(summaries)}")
+
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO summaries (transcript_id, summaries_json) VALUES (%s, %s) RETURNING id",
+                    (int(transcript_id), data),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError("Failed to insert summaries")
+                rid = row[0]
+                logger.info(f"摘要保存成功: summary_id={rid}")
+                return int(rid)
+    finally:
+        conn.close()
+
+
+def get_summaries_by_transcript_id(db_url: Optional[str], transcript_id: int) -> Optional[List[Dict[str, Any]]]:
+    """根据 transcript_id 获取最新的摘要记录。"""
+    conn_params = _ensure_conn_params(db_url)
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, summaries_json, created_at
+                    FROM summaries
+                    WHERE transcript_id = %s
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (int(transcript_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                try:
+                    summaries = json.loads(row["summaries_json"])
+                    return summaries if isinstance(summaries, list) else []
+                except Exception:
+                    return None
+    finally:
+        conn.close()
+
+
+def list_summaries_meta(db_url: Optional[str], limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    """列出所有摘要记录的元信息。
+    返回: [{id, transcript_id, created_at, summary_count}]
+    """
+    conn_params = _ensure_conn_params(db_url)
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, transcript_id, summaries_json, created_at
+                    FROM summaries
+                    ORDER BY id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (int(limit), int(offset)),
+                )
+                rows = cur.fetchall()
+                items: List[Dict[str, Any]] = []
+                for r in rows:
+                    rid = r["id"]
+                    transcript_id = r["transcript_id"]
+                    summaries_json = r["summaries_json"]
+                    created_at = r["created_at"]
+                    try:
+                        summaries = json.loads(summaries_json)
+                        summary_count = len(summaries) if isinstance(summaries, list) else 0
+                    except Exception:
+                        summary_count = 0
+                    items.append({
+                        "id": int(rid),
+                        "transcript_id": int(transcript_id),
+                        "created_at": str(created_at),
+                        "summary_count": int(summary_count),
+                    })
+                return items
     finally:
         conn.close()

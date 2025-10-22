@@ -43,7 +43,7 @@ git clone https://github.com/li-xiu-qi/HearSight
 
 # Postgres - change this password for production
 POSTGRES_USER=hearsight
-POSTGRES_PASSWORD=hearsight_pass
+POSTGRES_PASSWORD=nB2JFGGDwHDbw5yJ
 POSTGRES_DB=hearsight
 POSTGRES_PORT=5432
 

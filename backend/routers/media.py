@@ -17,6 +17,8 @@ from backend.db.pg_store import (
     create_job,
     get_job,
     list_jobs,
+    get_summaries_by_transcript_id,
+    list_summaries_meta,
 )
 from backend.utils.vedio_utils.download_video.download_bilibili import download_bilibili
 from backend.text_process.summarize import summarize_segments
@@ -277,3 +279,26 @@ def api_delete_transcript_complete(transcript_id: int, request: Request) -> Dict
     except Exception as e:
         logging.error(f"删除操作失败: {e}")
         raise HTTPException(status_code=500, detail=f"删除操作失败: {str(e)}")
+
+
+@router.get("/summaries")
+def api_list_summaries(request: Request, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+    """列出所有摘要记录。
+    Query:
+      - limit: 返回数量（默认50）
+      - offset: 偏移量（默认0）
+    返回: { items: [{id, transcript_id, created_at, summary_count}] }
+    """
+    db_url = request.app.state.db_url
+    items = list_summaries_meta(db_url, limit=limit, offset=offset)
+    return {"items": items}
+
+
+@router.get("/summaries/transcript/{transcript_id}")
+def api_get_summaries_by_transcript(transcript_id: int, request: Request) -> Dict[str, Any]:
+    """获取指定转写记录的摘要。"""
+    db_url = request.app.state.db_url
+    summaries = get_summaries_by_transcript_id(db_url, transcript_id)
+    if summaries is None:
+        raise HTTPException(status_code=404, detail=f"summaries not found for transcript: {transcript_id}")
+    return {"summaries": summaries}

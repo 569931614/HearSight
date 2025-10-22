@@ -15,6 +15,14 @@ export interface TranscriptMeta {
   segment_count: number
 }
 
+// 摘要记录元数据
+export interface SummaryMeta {
+  id: number
+  transcript_id: number
+  created_at: string
+  summary_count: number
+}
+
 // 任务项类型
 export interface JobItem {
   id: number
@@ -28,7 +36,7 @@ export interface JobItem {
 }
 
 // URL解析结果类型
-export type ParseResult = 
+export type ParseResult =
   | { kind: 'BV' | 'av' | 'ep' | 'ss' | 'md'; id: string }
   | { error: string }
 
@@ -60,4 +68,8 @@ export interface TranscriptDetailResponse {
 
 export interface SummarizeResponse {
   summaries?: Summary[]
+}
+
+export interface SummariesResponse {
+  items: SummaryMeta[]
 }

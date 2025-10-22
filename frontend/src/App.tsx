@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import './index.css'
-import { Layout, Typography, Button, Form, Input, Space, Alert, Tag, message } from 'antd'
-import { MenuOutlined, CloseOutlined, SearchOutlined, ReloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons'
-import { extractFilename, seekVideoTo, parseBilibiliUrl } from './utils'
-import { fetchJobs, fetchTranscripts, fetchTranscriptDetail, createJob } from './services/api'
-import type { Segment, TranscriptMeta, JobItem, ParseResult } from './types'
+import { Layout, Typography, Button, Space, Tag, Modal } from 'antd'
+import { CloseOutlined, LeftOutlined, MessageOutlined } from '@ant-design/icons'
+import { extractFilename, seekVideoTo } from './utils'
+import { fetchTranscriptDetail, fetchSummariesByTranscript, fetchAllSummaries } from './services/api'
+import type { Segment, SummaryMeta } from './types'
 import LeftPanel from './components/LeftPanel'
 import VideoPlayer from './components/VideoPlayer'
 import RightPanel from './components/RightPanel'
+import ChatPanel from './components/ChatPanel'
 
 const { Header, Footer } = Layout
 const { Title } = Typography
@@ -15,43 +16,31 @@ const { Title } = Typography
 function App() {
   const [segments, setSegments] = useState<Array<Segment>>([])
   const [loading, setLoading] = useState(false)
-  const [transcripts, setTranscripts] = useState<Array<TranscriptMeta>>([])
-  const [jobs, setJobs] = useState<Array<JobItem>>([])
+  const [summaries, setSummaries] = useState<Array<SummaryMeta>>([])
   const [videoSrc, setVideoSrc] = useState<string | null>(null)
   const [activeSegIndex, setActiveSegIndex] = useState<number | null>(null)
   const [activeTranscriptId, setActiveTranscriptId] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState<boolean>(true) // 默认开启自动滚动
-  
+  const [savedSummaries, setSavedSummaries] = useState<Array<any>>([]) // 保存的摘要
+
   // 全屏布局状态
-  const [leftPanelVisible, setLeftPanelVisible] = useState(true) // 默认显示历史记录面板
+  const [leftPanelVisible, setLeftPanelVisible] = useState(true) // 默认显示侧边栏
   const [rightPanelVisible, setRightPanelVisible] = useState(false)
-  const [url, setUrl] = useState('')
-  const [urlError, setUrlError] = useState<string | null>(null)
-  const [urlResult, setUrlResult] = useState<ParseResult | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+  const [chatPanelVisible, setChatPanelVisible] = useState(true) // 默认显示AI对话
+  const [videoModalVisible, setVideoModalVisible] = useState(false) // 视频播放器弹窗
   
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const segScrollRef = useRef<HTMLDivElement | null>(null)
   const histScrollRef = useRef<HTMLDivElement | null>(null)
   const prevActiveRef = useRef<number | null>(null)
 
-  // 获取转写记录列表
-  const loadTranscripts = async () => {
+  // 获取摘要列表
+  const loadSummaries = async () => {
     try {
-      const data = await fetchTranscripts()
-      setTranscripts(Array.isArray(data.items) ? data.items : [])
+      const data = await fetchAllSummaries()
+      setSummaries(Array.isArray(data.items) ? data.items : [])
     } catch (err: any) {
-      console.error('获取转写记录失败:', err?.message || err)
-    }
-  }
-
-  // 获取任务队列
-  const loadJobs = async () => {
-    try {
-      const data = await fetchJobs()
-      setJobs(data.items)
-    } catch (err: any) {
-      console.warn('获取任务队列失败:', err?.message || err)
+      console.warn('获取摘要列表失败:', err?.message || err)
     }
   }
 
@@ -66,6 +55,19 @@ function App() {
       }
       setSegments(Array.isArray(data.segments) ? data.segments : [])
       setActiveTranscriptId(id)
+
+      // 从专门的摘要 API 获取摘要数据
+      try {
+        const summaryData = await fetchSummariesByTranscript(id)
+        setSavedSummaries(summaryData.summaries || [])
+      } catch (err: any) {
+        console.warn('获取摘要失败:', err?.message || err)
+        setSavedSummaries([])
+      }
+
+      // 打开视频播放器弹窗
+      setVideoModalVisible(true)
+      setRightPanelVisible(true)
     } catch (err: any) {
       console.error('获取转写记录详情失败:', err?.message || err)
     } finally {
@@ -76,43 +78,6 @@ function App() {
   // 视频跳转
   const handleSeekTo = (timeMs: number) => {
     seekVideoTo(videoRef.current, timeMs)
-  }
-
-  // 处理URL提交
-  const handleUrlSubmit = async () => {
-    setUrlError(null)
-    setUrlResult(null)
-    
-    const parsed = parseBilibiliUrl(url)
-    if ('error' in parsed) {
-      setUrlError(parsed.error)
-      setUrlResult(parsed)
-    } else {
-      setUrlResult(parsed)
-      try {
-        setSubmitting(true)
-        const data = await createJob(url)
-        if (data && typeof data.job_id === 'number') {
-          message.success(`任务已创建：#${data.job_id}`)
-          // 立即刷新任务队列，避免等待下次轮询
-          loadJobs()
-        } else {
-          message.warning('任务创建返回异常')
-        }
-      } catch (e: any) {
-        setUrlError(e?.message || '创建任务出错')
-        message.error(e?.message || '创建任务出错')
-      } finally {
-        setSubmitting(false)
-      }
-    }
-  }
-
-  // 清除URL输入
-  const handleUrlClear = () => {
-    setUrl('')
-    setUrlError(null)
-    setUrlResult(null)
   }
 
   // 当 activeTranscriptId 改变时，让历史列表滚动到该项
@@ -172,14 +137,8 @@ function App() {
 
   // 定期获取数据
   useEffect(() => {
-    void loadTranscripts()
-    const timer = setInterval(() => { void loadTranscripts() }, 5000)
-    return () => clearInterval(timer)
-  }, [])
-
-  useEffect(() => {
-    void loadJobs()
-    const timer = setInterval(() => { void loadJobs() }, 5000)
+    void loadSummaries()
+    const timer = setInterval(() => { void loadSummaries() }, 10000)
     return () => clearInterval(timer)
   }, [])
 
@@ -188,68 +147,28 @@ function App() {
       {/* 顶部工具栏 */}
       <Header className="fullscreen-header">
         <div className="header-left">
-          <Title level={3} style={{ margin: 0, color: 'white' }}>HearSight</Title>
+          <Title level={3} style={{ margin: 0, color: 'white' }}>HearSight - AI 视频智能分析</Title>
         </div>
-        
-        <div className="header-center">
-          <Form layout="inline" onFinish={handleUrlSubmit}>
-            <Form.Item style={{ marginBottom: 0 }}>
-              <Input
-                allowClear
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="请输入 bilibili.com 链接"
-                style={{ width: 300 }}
-              />
-            </Form.Item>
-            <Form.Item style={{ marginBottom: 0 }}>
-              <Space>
-                <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={submitting}>
-                  解析
-                </Button>
-                <Button icon={<ReloadOutlined />} onClick={handleUrlClear}>
-                  清空
-                </Button>
-              </Space>
-            </Form.Item>
-          </Form>
-        </div>
-        
+
         <div className="header-right">
           <Space>
-            <Button 
+            <Button
               type={leftPanelVisible ? 'primary' : 'default'}
               icon={<LeftOutlined />}
               onClick={() => setLeftPanelVisible(!leftPanelVisible)}
             >
-              历史记录
+              侧边栏
             </Button>
-            <Button 
-              type={rightPanelVisible ? 'primary' : 'default'}
-              icon={<RightOutlined />}
-              onClick={() => setRightPanelVisible(!rightPanelVisible)}
+            <Button
+              type={chatPanelVisible ? 'primary' : 'default'}
+              icon={<MessageOutlined />}
+              onClick={() => setChatPanelVisible(!chatPanelVisible)}
             >
-              分句总结
+              AI 对话
             </Button>
           </Space>
         </div>
       </Header>
-      
-      {/* URL解析结果提示 */}
-      {(urlError || urlResult) && (
-        <div className="url-result-bar">
-          {urlError && <Alert type="error" message={urlError} showIcon closable onClose={() => setUrlError(null)} />}
-          {urlResult && !('error' in urlResult) && (
-            <Alert
-              type="success"
-              message={`解析成功：${urlResult.kind} - ${urlResult.id}`}
-              showIcon
-              closable
-              onClose={() => setUrlResult(null)}
-            />
-          )}
-        </div>
-      )}
       
       {/* 主内容区域 */}
       <div className="fullscreen-content">
@@ -257,61 +176,54 @@ function App() {
         {leftPanelVisible && (
           <div className="fullscreen-left-panel">
             <div className="panel-header">
-              <span>历史记录</span>
-              <Button 
-                type="text" 
-                icon={<CloseOutlined />} 
+              <span>对话与视频</span>
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
                 onClick={() => setLeftPanelVisible(false)}
                 size="small"
               />
             </div>
             <div className="panel-content">
               <LeftPanel
-                transcripts={transcripts}
-                jobs={jobs}
-                activeTranscriptId={activeTranscriptId}
+                summaries={summaries}
                 onLoadTranscript={loadTranscriptDetail}
-                onJobsUpdate={loadJobs}
-                onTranscriptsUpdate={loadTranscripts}
+                onSummariesUpdate={loadSummaries}
               />
             </div>
           </div>
         )}
         
-        {/* 主视频区域 */}
-        <div className={`fullscreen-main ${leftPanelVisible ? 'with-left' : ''} ${rightPanelVisible ? 'with-right' : ''}`}>
-          <VideoPlayer
-            ref={videoRef}
-            videoSrc={videoSrc}
-            loading={loading}
-          />
+        {/* 主内容区域 - AI 对话或欢迎页面 */}
+        <div className={`fullscreen-main ${leftPanelVisible ? 'with-left' : ''}`}>
+          {chatPanelVisible ? (
+            <ChatPanel
+              onVideoSeek={(videoPath, startTime) => {
+                // 打开视频弹窗并跳转到指定时间
+                // TODO: 根据 videoPath 加载对应视频
+                setVideoModalVisible(true)
+                setRightPanelVisible(true)
+                // 延迟执行跳转，确保视频加载完成
+                setTimeout(() => {
+                  handleSeekTo(startTime * 1000)
+                }, 500)
+              }}
+            />
+          ) : (
+            <div style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              height: '100%',
+              flexDirection: 'column',
+              gap: '20px',
+              color: '#999'
+            }}>
+              <h2>欢迎使用 HearSight</h2>
+              <p>从左侧选择视频或点击"AI 对话"开始</p>
+            </div>
+          )}
         </div>
-        
-        {/* 右侧面板 */}
-        {rightPanelVisible && (
-          <div className="fullscreen-right-panel">
-            <div className="panel-header">
-              <span>分句与总结</span>
-              <Button 
-                type="text" 
-                icon={<CloseOutlined />} 
-                onClick={() => setRightPanelVisible(false)}
-                size="small"
-              />
-            </div>
-            <div className="panel-content">
-              <RightPanel
-                ref={segScrollRef}
-                segments={segments}
-                activeSegIndex={activeSegIndex}
-                autoScroll={autoScroll}
-                onSeekTo={handleSeekTo}
-                onActiveSegmentChange={setActiveSegIndex}
-                onAutoScrollChange={setAutoScroll}
-              />
-            </div>
-          </div>
-        )}
       </div>
       
       {/* 底部状态栏 */}
@@ -323,6 +235,61 @@ function App() {
           {segments.length > 0 && <Tag>{segments.length} 个分句</Tag>}
         </div>
       </Footer>
+
+      {/* 视频播放器弹窗 */}
+      <Modal
+        title="视频播放"
+        open={videoModalVisible}
+        onCancel={() => setVideoModalVisible(false)}
+        width="90%"
+        style={{ top: 20 }}
+        footer={null}
+        destroyOnClose={false}
+      >
+        <div style={{ display: 'flex', gap: '16px', height: '80vh' }}>
+          {/* 左侧视频播放器 */}
+          <div style={{ flex: 2 }}>
+            <VideoPlayer
+              ref={videoRef}
+              videoSrc={videoSrc}
+              loading={loading}
+            />
+          </div>
+
+          {/* 右侧分句与总结 */}
+          {rightPanelVisible && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <div style={{
+                padding: '8px 12px',
+                borderBottom: '1px solid #f0f0f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <span style={{ fontWeight: 500 }}>分句与总结</span>
+                <Button
+                  type="text"
+                  icon={<CloseOutlined />}
+                  onClick={() => setRightPanelVisible(false)}
+                  size="small"
+                />
+              </div>
+              <div style={{ flex: 1, overflow: 'auto' }}>
+                <RightPanel
+                  ref={segScrollRef}
+                  segments={segments}
+                  activeSegIndex={activeSegIndex}
+                  autoScroll={autoScroll}
+                  savedSummaries={savedSummaries}
+                  onSeekTo={handleSeekTo}
+                  onActiveSegmentChange={setActiveSegIndex}
+                  onAutoScrollChange={setAutoScroll}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
     </Layout>
   )
 }
