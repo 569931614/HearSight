@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import 'antd/dist/reset.css'
-import { ConfigProvider, theme } from 'antd'
+import { ConfigProvider, theme, App as AntdApp } from 'antd'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(
@@ -12,7 +12,9 @@ createRoot(document.getElementById('root')!).render(
         algorithm: theme.defaultAlgorithm,
       }}
     >
-      <App />
+      <AntdApp>
+        <App />
+      </AntdApp>
     </ConfigProvider>
   </StrictMode>,
 )

@@ -69,20 +69,89 @@ button:focus-visible {
   }
 }
 
-.hist-item { padding: 6px 0 !important; }
-.hist-main { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; }
-.hist-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
-.hist-title { 
-  font-weight: 600; 
-  color: #262626; 
-  font-size: 13px; 
-  white-space: nowrap; 
-  overflow: hidden; 
+.hist-item {
+  padding: 8px 12px !important;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+  background: #fafafa;
+  cursor: pointer;
+  position: relative;
+}
+.hist-item:hover {
+  background: linear-gradient(135deg, #f0f5ff 0%, #e6f0ff 100%);
+  border-color: #91d5ff;
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.15);
+}
+.hist-item-selected {
+  background: linear-gradient(135deg, #e6f7ff 0%, #d6eeff 100%) !important;
+  border-color: #40a9ff !important;
+  box-shadow: 0 3px 12px rgba(24, 144, 255, 0.25) !important;
+  transform: translateX(3px);
+}
+.hist-item-selected:hover {
+  background: linear-gradient(135deg, #d9f0ff 0%, #c9e6ff 100%) !important;
+  border-color: #1890ff !important;
+}
+.hist-item-selected .hist-title {
+  color: #1890ff;
+  font-weight: 700;
+}
+
+/* 删除按钮样式 - 默认隐藏，hover 时显示 */
+.hist-item .hist-delete-btn {
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  transform: scale(0.9);
+}
+.hist-item:hover .hist-delete-btn {
+  opacity: 1;
+  transform: scale(1);
+}
+.hist-item-selected .hist-delete-btn {
+  opacity: 0.6;
+}
+.hist-item-selected:hover .hist-delete-btn {
+  opacity: 1;
+}
+.hist-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.hist-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+.hist-title {
+  font-weight: 600;
+  color: #262626;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
   text-overflow: ellipsis;
   flex: 1 1 auto;
   min-width: 0;
+  line-height: 1.4;
 }
-.hist-meta { font-size: 12px; color: #8c8c8c; }
+.hist-meta {
+  font-size: 11px;
+  color: #8c8c8c;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.hist-meta::before {
+  content: '🕒';
+  font-size: 10px;
+}
 .hist-open { padding: 0; min-width: 32px; }
 
 /* 确保右侧操作区域宽度一致 */

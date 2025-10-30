@@ -35,7 +35,7 @@ try:
         password=password,
         database='postgres'  # 先连接默认数据库
     )
-    print("✅ 成功连接到 postgres 数据库！")
+    print("[OK] 成功连接到 postgres 数据库！")
 
     # 检查 hearsight 数据库是否存在
     cursor = conn.cursor()
@@ -43,22 +43,22 @@ try:
     exists = cursor.fetchone()
 
     if exists:
-        print(f"✅ 数据库 '{database}' 已存在")
+        print(f"[OK] 数据库 '{database}' 已存在")
     else:
-        print(f"⚠️  数据库 '{database}' 不存在，需要创建")
+        print(f"[警告] 数据库 '{database}' 不存在，需要创建")
         # 尝试创建数据库
         try:
             conn.set_isolation_level(0)  # 自动提交模式
             cursor.execute(f"CREATE DATABASE {database}")
-            print(f"✅ 成功创建数据库 '{database}'")
+            print(f"[OK] 成功创建数据库 '{database}'")
         except Exception as e:
-            print(f"❌ 创建数据库失败: {e}")
+            print(f"[错误] 创建数据库失败: {e}")
 
     cursor.close()
     conn.close()
 
 except psycopg2.OperationalError as e:
-    print(f"❌ 连接失败: {e}")
+    print(f"[错误] 连接失败: {e}")
     print("\n可能的原因:")
     print("1. 用户名或密码错误")
     print("2. 数据库服务未启动")
@@ -76,21 +76,21 @@ try:
         password=password,
         database=database
     )
-    print(f"✅ 成功连接到 '{database}' 数据库！")
+    print(f"[OK] 成功连接到 '{database}' 数据库！")
 
     # 测试查询
     cursor = conn.cursor()
     cursor.execute("SELECT version()")
     version = cursor.fetchone()[0]
-    print(f"✅ PostgreSQL 版本: {version[:50]}...")
+    print(f"[OK] PostgreSQL 版本: {version[:50]}...")
 
     cursor.close()
     conn.close()
 
     print("\n" + "=" * 60)
-    print("🎉 数据库连接测试成功！可以启动 HearSight")
+    print("[成功] 数据库连接测试成功！可以启动 HearSight")
     print("=" * 60)
 
 except psycopg2.OperationalError as e:
-    print(f"❌ 连接失败: {e}")
+    print(f"[错误] 连接失败: {e}")
     exit(1)

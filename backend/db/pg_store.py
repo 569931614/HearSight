@@ -127,6 +127,47 @@ def init_db(db_url: Optional[str] = None) -> None:
                     ON summaries(transcript_id);
                     """
                 )
+                # 对话历史表
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS chat_history (
+                        id SERIAL PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        metadata JSONB,
+                        created_at TIMESTAMP NOT NULL DEFAULT (now())
+                    );
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_chat_history_session_id
+                    ON chat_history(session_id, created_at DESC);
+                    """
+                )
+                # 系统配置表
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS system_config (
+                        id SERIAL PRIMARY KEY,
+                        config_key TEXT NOT NULL UNIQUE,
+                        config_value TEXT NOT NULL,
+                        updated_at TIMESTAMP NOT NULL DEFAULT (now())
+                    );
+                    """
+                )
+                # 插入默认配置
+                cur.execute(
+                    """
+                    INSERT INTO system_config (config_key, config_value)
+                    VALUES
+                        ('system_prompt', '你是一个专业的视频内容助手，能够根据视频转写内容回答用户的问题。请基于提供的上下文准确、详细地回答问题。'),
+                        ('site_title', 'HearSight - AI 视频智能分析'),
+                        ('admin_password', 'admin123')
+                    ON CONFLICT (config_key) DO NOTHING;
+                    """
+                )
     finally:
         conn.close()
 
@@ -274,6 +315,31 @@ def get_transcript_by_id(db_url: Optional[str], transcript_id: int) -> Optional[
                     "created_at": str(row["created_at"]),
                     "segments": segs,
                 }
+    finally:
+        conn.close()
+
+
+def get_transcript_id_by_path(db_url: Optional[str], media_path: str) -> Optional[int]:
+    """根据 media_path 查找对应的 transcript_id"""
+    conn_params = _ensure_conn_params(db_url)
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id FROM transcripts
+                    WHERE media_path = %s
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (media_path,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else None
     finally:
         conn.close()
 
@@ -633,5 +699,219 @@ def list_summaries_meta(db_url: Optional[str], limit: int = 50, offset: int = 0)
                         "summary_count": int(summary_count),
                     })
                 return items
+    finally:
+        conn.close()
+
+
+def save_chat_message(
+    db_url: Optional[str],
+    session_id: str,
+    role: str,
+    content: str,
+    metadata: Optional[Dict[str, Any]] = None
+) -> int:
+    """保存对话消息到历史记录。
+
+    Args:
+        db_url: 数据库连接
+        session_id: 会话ID
+        role: 角色（user/assistant）
+        content: 消息内容
+        metadata: 额外元数据（可选）
+
+    Returns:
+        int: 新创建的消息记录ID
+    """
+    conn_params = _ensure_conn_params(db_url)
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO chat_history (session_id, role, content, metadata)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (session_id, role, content, metadata_json),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError("Failed to insert chat message")
+                return int(row[0])
+    finally:
+        conn.close()
+
+
+def get_chat_history(
+    db_url: Optional[str],
+    session_id: str,
+    limit: int = 50
+) -> List[Dict[str, Any]]:
+    """获取指定会话的对话历史。
+
+    Args:
+        db_url: 数据库连接
+        session_id: 会话ID
+        limit: 返回最近的消息数量
+
+    Returns:
+        List[Dict]: 对话历史列表 [{id, role, content, metadata, created_at}]
+    """
+    conn_params = _ensure_conn_params(db_url)
+
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, session_id, role, content, metadata, created_at
+                    FROM chat_history
+                    WHERE session_id = %s
+                    ORDER BY created_at ASC
+                    LIMIT %s
+                    """,
+                    (session_id, int(limit)),
+                )
+                rows = cur.fetchall()
+                items: List[Dict[str, Any]] = []
+                for r in rows:
+                    # JSONB 字段会被 psycopg2 自动解析为 Python dict，不需要 json.loads
+                    metadata = r["metadata"] if r["metadata"] else {}
+
+                    items.append({
+                        "id": int(r["id"]),
+                        "session_id": str(r["session_id"]),
+                        "role": str(r["role"]),
+                        "content": str(r["content"]),
+                        "metadata": metadata,
+                        "created_at": str(r["created_at"]),
+                    })
+                return items
+    finally:
+        conn.close()
+
+
+def delete_chat_session(db_url: Optional[str], session_id: str) -> bool:
+    """删除指定会话的所有对话记录。
+
+    Args:
+        db_url: 数据库连接
+        session_id: 会话ID
+
+    Returns:
+        bool: 是否删除成功
+    """
+    conn_params = _ensure_conn_params(db_url)
+
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM chat_history WHERE session_id = %s",
+                    (session_id,),
+                )
+                return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_config(db_url: Optional[str], config_key: str) -> Optional[str]:
+    """获取系统配置。
+
+    Args:
+        db_url: 数据库连接
+        config_key: 配置键
+
+    Returns:
+        Optional[str]: 配置值，如果不存在返回 None
+    """
+    conn_params = _ensure_conn_params(db_url)
+
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT config_value FROM system_config WHERE config_key = %s",
+                    (config_key,),
+                )
+                row = cur.fetchone()
+                return str(row["config_value"]) if row else None
+    finally:
+        conn.close()
+
+
+def get_all_configs(db_url: Optional[str]) -> Dict[str, str]:
+    """获取所有系统配置。
+
+    Args:
+        db_url: 数据库连接
+
+    Returns:
+        Dict[str, str]: 配置字典
+    """
+    conn_params = _ensure_conn_params(db_url)
+
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT config_key, config_value FROM system_config")
+                rows = cur.fetchall()
+                return {str(row["config_key"]): str(row["config_value"]) for row in rows}
+    finally:
+        conn.close()
+
+
+def update_config(db_url: Optional[str], config_key: str, config_value: str) -> bool:
+    """更新系统配置。
+
+    Args:
+        db_url: 数据库连接
+        config_key: 配置键
+        config_value: 配置值
+
+    Returns:
+        bool: 是否更新成功
+    """
+    conn_params = _ensure_conn_params(db_url)
+
+    if "dsn" in conn_params:
+        conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
+    else:
+        conn = psycopg2.connect(**conn_params)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO system_config (config_key, config_value, updated_at)
+                    VALUES (%s, %s, now())
+                    ON CONFLICT (config_key)
+                    DO UPDATE SET config_value = EXCLUDED.config_value, updated_at = now()
+                    """,
+                    (config_key, config_value),
+                )
+                return True
     finally:
         conn.close()

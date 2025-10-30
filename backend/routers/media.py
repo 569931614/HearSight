@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 import logging
 
 from backend.audio2text.asr_sentence_segments import process as asr_process
@@ -13,12 +13,14 @@ from backend.db.pg_store import (
     list_transcripts_meta,
     count_transcripts,
     get_transcript_by_id,
+    get_transcript_id_by_path,
     delete_transcript,
     create_job,
     get_job,
     list_jobs,
     get_summaries_by_transcript_id,
     list_summaries_meta,
+    save_summaries,
 )
 from backend.utils.vedio_utils.download_video.download_bilibili import download_bilibili
 from backend.text_process.summarize import summarize_segments
@@ -26,6 +28,18 @@ from config import get_config
 import os
 
 router = APIRouter(prefix="/api", tags=["media"])
+
+
+def _build_static_url(static_dir: Path, media_path: Optional[str]) -> Optional[str]:
+    if not media_path:
+        return None
+    try:
+        media = Path(media_path).resolve()
+        base = static_dir.resolve()
+        rel = media.relative_to(base)
+        return f"/static/{rel.as_posix()}"
+    except Exception:
+        return f"/static/{Path(media_path).name}"
 
 
 @router.post("/download")
@@ -148,19 +162,43 @@ def api_list_transcripts(request: Request, limit: int = 50, offset: int = 0) -> 
     返回: { total, items: [{id, media_path, created_at, segment_count}] }
     """
     db_url = request.app.state.db_url
+    static_dir = Path(request.app.state.static_dir).resolve()
     total = count_transcripts(db_url)
     items = list_transcripts_meta(db_url, limit=limit, offset=offset)
-    return {"total": total, "items": items}
+
+    enriched = []
+    for item in items:
+        media_path = item.get("media_path")
+        static_url = _build_static_url(static_dir, media_path) if media_path else None
+        enriched.append({**item, "static_url": static_url})
+
+    return {"total": total, "items": enriched}
 
 
 @router.get("/transcripts/{transcript_id}")
 def api_get_transcript(transcript_id: int, request: Request) -> Dict[str, Any]:
     """获取指定转写记录的详情（包含 segments）。"""
     db_url = request.app.state.db_url
+    static_dir = Path(request.app.state.static_dir).resolve()
     data = get_transcript_by_id(db_url, transcript_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"transcript not found: {transcript_id}")
+
+    data["static_url"] = _build_static_url(static_dir, data.get("media_path"))
     return data
+
+
+@router.get("/transcripts/by-path")
+def api_get_transcript_id_by_path(request: Request, media_path: str = Query(..., description="视频文件的完整路径")) -> Dict[str, Any]:
+    """根据 media_path 查找对应的 transcript_id"""
+    db_url = request.app.state.db_url
+    logger.info(f"[by-path] 查询路径: {media_path}")
+    transcript_id = get_transcript_id_by_path(db_url, media_path)
+    if transcript_id is None:
+        logger.warning(f"[by-path] 未找到匹配的转写记录: {media_path}")
+        raise HTTPException(status_code=422, detail=f"未找到对应的转写记录")
+    logger.info(f"[by-path] 找到转写记录: transcript_id={transcript_id}")
+    return {"transcript_id": transcript_id, "media_path": media_path}
 
 
 @router.post("/jobs")
@@ -302,3 +340,98 @@ def api_get_summaries_by_transcript(transcript_id: int, request: Request) -> Dic
     if summaries is None:
         raise HTTPException(status_code=404, detail=f"summaries not found for transcript: {transcript_id}")
     return {"summaries": summaries}
+
+
+@router.post("/import/pyvideotrans")
+def api_import_from_pyvideotrans(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+    """
+    从 pyvideotrans 导入翻译后的视频数据
+
+    请求体:
+        - media_path: 视频文件路径
+        - segments: 字幕片段列表 [{"start_time": float, "end_time": float, "text": str}]
+        - paragraphs: 段落摘要列表 [{"start_time": float, "end_time": float, "text": str, "summary": str}]
+        - summary: 整体摘要 {"topic": str, "summary": str, "paragraph_count": int, "total_duration": float}
+        - metadata: 额外元数据（可选）
+
+    返回:
+        - transcript_id: 创建的转写记录 ID
+        - success: 是否成功
+        - message: 消息
+    """
+    try:
+        db_url = request.app.state.db_url
+
+        # 验证必需字段
+        media_path = payload.get("media_path")
+        segments = payload.get("segments")
+        paragraphs = payload.get("paragraphs")
+        summary = payload.get("summary")
+
+        if not media_path:
+            raise HTTPException(status_code=400, detail="media_path is required")
+        if not segments or not isinstance(segments, list):
+            raise HTTPException(status_code=400, detail="segments (list) is required")
+        if not paragraphs or not isinstance(paragraphs, list):
+            raise HTTPException(status_code=400, detail="paragraphs (list) is required")
+        if not summary or not isinstance(summary, dict):
+            raise HTTPException(status_code=400, detail="summary (dict) is required")
+
+        # 1. 创建转写记录
+        transcript_id = save_transcript(
+            db_url=db_url,
+            media_path=media_path,
+            segments=segments
+        )
+
+        if not transcript_id:
+            raise HTTPException(status_code=500, detail="Failed to create transcript")
+
+        logging.info(f"[pyvideotrans import] Created transcript: {transcript_id}")
+
+        # 2. 创建摘要记录
+        summaries = []
+        for para in paragraphs:
+            summaries.append({
+                "text": para.get("text", ""),
+                "summary": para.get("summary", ""),
+                "start_time": para.get("start_time", 0.0),
+                "end_time": para.get("end_time", 0.0)
+            })
+
+        if summaries:
+            save_summaries(db_url, transcript_id, summaries)
+            logging.info(f"[pyvideotrans import] Created {len(summaries)} summaries")
+
+        # 3. 同步到向量库
+        try:
+            from backend.knowledge.knowledge_service import sync_transcript_to_vector_db
+            vector_db_dir = getattr(request.app.state, "vector_db_dir", Path(request.app.state.static_dir).parent / "vector_db")
+
+            sync_success = sync_transcript_to_vector_db(
+                db_url=db_url,
+                transcript_id=transcript_id,
+                persist_directory=str(vector_db_dir)
+            )
+
+            if sync_success:
+                logging.info(f"[pyvideotrans import] Synced to vector DB: transcript_id={transcript_id}")
+            else:
+                logging.warning(f"[pyvideotrans import] Failed to sync to vector DB: transcript_id={transcript_id}")
+
+        except Exception as e:
+            logging.warning(f"[pyvideotrans import] Vector DB sync error: {e}")
+
+        return {
+            "success": True,
+            "transcript_id": transcript_id,
+            "message": f"Successfully imported from pyvideotrans, transcript_id={transcript_id}"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[pyvideotrans import] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")

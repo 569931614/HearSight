@@ -11,6 +11,7 @@ export interface Segment {
 export interface TranscriptMeta {
   id: number
   media_path: string
+  static_url?: string
   created_at: string
   segment_count: number
 }
@@ -63,6 +64,7 @@ export interface JobsResponse {
 
 export interface TranscriptDetailResponse {
   media_path: string
+  static_url?: string
   segments: Segment[]
 }
 

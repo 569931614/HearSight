@@ -4,6 +4,7 @@
 使用 ChromaDB 存储视频摘要和段落内容，支持语义检索
 """
 import os
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 import hashlib
 import json
@@ -112,6 +113,12 @@ class VectorStore:
             metadatas = []
             ids = []
 
+            # 重复写入前先清理旧数据，避免重复的ID导致失败
+            try:
+                self.collection.delete(where={"video_id": video_id})
+            except Exception as delete_err:
+                logger.warning(f"⚠️ 删除旧的向量数据失败: {delete_err}")
+
             # 1. 存储整体摘要
             overall_doc = f"主题: {summary.get('topic', '')}\n总结: {summary.get('summary', '')}"
             documents.append(overall_doc)
@@ -156,6 +163,9 @@ class VectorStore:
 
                 if para_summary:
                     para_meta["paragraph_summary"] = para_summary
+
+                if metadata:
+                    para_meta.update(metadata)
 
                 metadatas.append(para_meta)
                 ids.append(f"{video_id}_para_{i}")
@@ -377,16 +387,63 @@ def get_vector_store(persist_directory: str = None):
         persist_directory: 持久化目录路径
 
     Returns:
-        VectorStore: 向量存储实例
+        VectorStore 或 PostgreSQLVectorStore 或 VolcengineVectorClient: 向量存储实例
     """
     global _vector_store
 
-    if _vector_store is None:
-        if persist_directory is None:
-            # 使用与pyvideotrans共享的向量库目录
-            persist_directory = r"F:\智能体定制\20250904translateVideo\shared_vector_db"
+    # 检查是否使用火山引擎后端
+    use_volcengine = os.environ.get("HEARSIGHT_VECTOR_BACKEND", "").lower() == "volcengine"
 
-        _vector_store = VectorStore(persist_directory)
+    if use_volcengine:
+        from backend.knowledge.volcengine_vector import VolcengineVectorClient
+
+        # 从环境变量获取火山引擎配置
+        api_key = os.environ.get('VOLCENGINE_API_KEY', '')
+        base_url = os.environ.get('VOLCENGINE_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
+        collection_name = os.environ.get('VOLCENGINE_COLLECTION_NAME', 'video_summaries')
+        embedding_model = os.environ.get('VOLCENGINE_EMBEDDING_MODEL', 'ep-20241217191853-w54rf')
+
+        if not isinstance(_vector_store, VolcengineVectorClient):
+            logger.info('[vector] Using Volcengine vector backend')
+            _vector_store = VolcengineVectorClient(
+                api_key=api_key,
+                base_url=base_url,
+                collection_name=collection_name,
+                embedding_model=embedding_model
+            )
+        return _vector_store
+
+    # 检查是否使用 PostgreSQL 后端
+    use_postgresql = os.environ.get("HEARSIGHT_VECTOR_BACKEND", "").lower() == "postgresql"
+
+    if use_postgresql:
+        from backend.knowledge.postgresql_vector_store import PostgreSQLVectorStore
+
+        # 从环境变量获取数据库配置
+        db_config = {
+            'host': os.environ.get('POSTGRES_HOST', 'localhost'),
+            'port': int(os.environ.get('POSTGRES_PORT', 5432)),
+            'user': os.environ.get('POSTGRES_USER', 'postgres'),
+            'password': os.environ.get('POSTGRES_PASSWORD', ''),
+            'database': os.environ.get('POSTGRES_DB', 'hearsight')
+        }
+
+        if not isinstance(_vector_store, PostgreSQLVectorStore):
+            logger.info('[vector] Using PostgreSQL vector backend')
+            _vector_store = PostgreSQLVectorStore(db_config)
+            _vector_store.initialize()
+        return _vector_store
+
+    # 默认使用 ChromaDB
+    requested_dir = persist_directory
+    if requested_dir is None:
+        requested_dir = os.environ.get("HEARSIGHT_VECTOR_DB_DIR")
+    if requested_dir is None:
+        requested_dir = Path(__file__).resolve().parents[2] / "app_datas" / "vector_db"
+    requested_dir = str(requested_dir)
+
+    if _vector_store is None or str(_vector_store.persist_directory) != requested_dir:
+        _vector_store = VectorStore(requested_dir)
         _vector_store.initialize()
 
     return _vector_store

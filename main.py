@@ -14,6 +14,7 @@ from backend.utils.vedio_utils.download_video.download_bilibili import download_
 from backend.audio2text.asr_sentence_segments import process as asr_process
 from backend.routers.media import router as media_router
 from backend.routers.knowledge import router as knowledge_router
+from backend.routers.admin import router as admin_router
 
 
 
@@ -24,15 +25,24 @@ cfg = get_config()
 raw_cfg = load_config()
 app_datas = raw_cfg.get("app_datas", {}) if isinstance(raw_cfg, dict) else {}
 
-# 读取配置（相对路径以 main.py 同级目录为基准）
-download_video_path = Path(app_datas.get("download_video_path", "app_datas/download_videos"))
-
+# 共享视频静态目录（默认指向 app_datas/download_videos）
+shared_media_dir_cfg = os.environ.get("HEARSIGHT_SHARED_MEDIA_DIR") or app_datas.get("download_video_path", "app_datas/download_videos")
+download_video_path = Path(shared_media_dir_cfg)
 if not download_video_path.is_absolute():
     download_video_path = (APP_DIR / download_video_path).resolve()
-
-# 确保目录存在，并初始化数据库文件
 download_video_path.mkdir(parents=True, exist_ok=True)
-db_url = os.environ.get("POSTGRES_DSN") or os.environ.get("DATABASE_URL") or None
+
+# 共享向量库目录
+vector_db_dir_cfg = os.environ.get("HEARSIGHT_VECTOR_DB_DIR") or app_datas.get("vector_db_path", "app_datas/vector_db")
+vector_db_dir = Path(vector_db_dir_cfg)
+if not vector_db_dir.is_absolute():
+    vector_db_dir = (APP_DIR / vector_db_dir).resolve()
+vector_db_dir.mkdir(parents=True, exist_ok=True)
+
+# Build database URL from environment variables
+# 直接使用 None，在 pg_store.py 中从环境变量构建连接参数
+db_url = None
+
 init_db(db_url)
 
 # 创建应用
@@ -65,10 +75,13 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(download_video_path)), name="static")
 app.state.static_dir = download_video_path
 app.state.db_url = db_url
+app.state.vector_db_dir = vector_db_dir
+app.state.shared_media_dir = download_video_path
 
 # 注册路由
 app.include_router(media_router)
 app.include_router(knowledge_router)
+app.include_router(admin_router)
 
 
 # 启动后台worker：简单串行处理下载+ASR+摘要，避免阻塞请求线程
@@ -206,12 +219,12 @@ def _job_worker(app: FastAPI) -> None:
                 try:
                     logger.info(f"任务 #{job_id}: 开始同步到向量库...")
                     from backend.knowledge.knowledge_service import sync_transcript_to_vector_db
-                    # 使用与pyvideotrans共享的向量库路径
-                    vector_db_dir = r"F:\智能体定制\20250904translateVideo\shared_vector_db"
+                    # 使用与 pyvideotrans 共享的向量库路径
+                    vector_db_dir = getattr(app.state, "vector_db_dir", Path(app.state.static_dir).parent / "vector_db")
                     sync_success = sync_transcript_to_vector_db(
                         db_url=db_url,
                         transcript_id=res.get("transcript_id"),
-                        persist_directory=vector_db_dir
+                        persist_directory=str(vector_db_dir)
                     )
                     if sync_success:
                         logger.info(f"任务 #{job_id}: 成功同步到向量库")

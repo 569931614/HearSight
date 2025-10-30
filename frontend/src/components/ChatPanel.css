@@ -66,19 +66,124 @@
 
 .message-text {
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Markdown 样式 */
+.message-text p {
+  margin: 0.5em 0;
+}
+
+.message-text p:first-child {
+  margin-top: 0;
+}
+
+.message-text p:last-child {
+  margin-bottom: 0;
+}
+
+.message-text strong {
+  font-weight: 600;
+  color: inherit;
+}
+
+.message-text ol,
+.message-text ul {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.message-text li {
+  margin: 0.25em 0;
+}
+
+.message-text code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9em;
+}
+
+.message-text pre {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.8em;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+
+.message-text pre code {
+  background: none;
+  padding: 0;
+}
+
+.message-text blockquote {
+  border-left: 3px solid rgba(0, 0, 0, 0.1);
+  padding-left: 1em;
+  margin: 0.5em 0;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.message-text a {
+  color: #1890ff;
+  text-decoration: none;
+}
+
+.message-text a:hover {
+  text-decoration: underline;
+}
+
+/* 用户消息的 Markdown 样式覆盖 */
+.chat-message.user .message-text code {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.chat-message.user .message-text pre {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.chat-message.user .message-text blockquote {
+  border-left-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.chat-message.user .message-text a {
+  color: white;
+  text-decoration: underline;
 }
 
 .message-time {
   font-size: 12px;
   color: #999;
+}
+
+.message-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-top: 4px;
   padding: 0 4px;
 }
 
-.chat-message.user .message-time {
-  text-align: right;
+.message-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.chat-message:hover .message-actions {
+  opacity: 1;
+}
+
+.message-actions .ant-btn {
+  color: #999;
+}
+
+.message-actions .ant-btn:hover {
+  color: #1890ff;
 }
 
 .message-references {

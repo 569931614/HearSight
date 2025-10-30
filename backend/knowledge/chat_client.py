@@ -158,6 +158,7 @@ def chat_with_rag(
     base_url: str,
     model: str,
     system_prompt: Optional[str] = None,
+    history: Optional[List[Dict[str, str]]] = None,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -170,6 +171,7 @@ def chat_with_rag(
         base_url: API基础URL
         model: 模型名称
         system_prompt: 系统提示词
+        history: 历史对话列表（可选），格式 [{"role": "user/assistant", "content": "..."}]
         **kwargs: 其他参数
 
     Returns:
@@ -185,7 +187,8 @@ def chat_with_rag(
 1. 优先使用提供的视频内容进行回答
 2. 如果引用了特定片段，可以提到"根据视频 X 的 Y 秒到 Z 秒..."
 3. 保持回答简洁、准确
-4. 如果有多个相关片段支持答案，可以综合说明"""
+4. 如果有多个相关片段支持答案，可以综合说明
+5. 如果用户追问之前的问题，请参考历史对话给出连贯的回答"""
 
     # 构建上下文
     context_parts = []
@@ -217,11 +220,15 @@ def chat_with_rag(
 
 请根据上面提供的视频内容回答用户的问题。"""
 
-    # 调用 LLM
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message}
-    ]
+    # 构建消息列表
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # 添加历史对话
+    if history:
+        messages.extend(history)
+
+    # 添加当前用户消息
+    messages.append({"role": "user", "content": user_message})
 
     try:
         answer = chat_with_openai(

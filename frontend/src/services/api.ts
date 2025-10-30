@@ -79,12 +79,26 @@ export const fetchJobs = async (): Promise<JobsResponse> => {
  */
 export const fetchTranscriptDetail = async (id: number): Promise<TranscriptDetailResponse> => {
   const response = await fetch(`/api/transcripts/${id}`)
-  
+
   if (!response.ok) {
     throw new Error(`获取详情失败：${response.status}`)
   }
-  
+
   return response.json()
+}
+
+/**
+ * 根据 media_path 获取 transcript_id
+ */
+export const fetchTranscriptIdByPath = async (mediaPath: string): Promise<number> => {
+  const response = await fetch(`/api/transcripts/by-path?media_path=${encodeURIComponent(mediaPath)}`)
+
+  if (!response.ok) {
+    throw new Error(`未找到对应的转写记录：${response.status}`)
+  }
+
+  const data = await response.json()
+  return data.transcript_id
 }
 
 /**
@@ -171,19 +185,65 @@ export const fetchAllSummaries = async (limit = 50, offset = 0): Promise<{ items
 /**
  * 基于知识库的对话
  */
-export const chatWithKnowledge = async (query: string, n_results = 5): Promise<{
+export const chatWithKnowledge = async (
+  query: string,
+  n_results = 5,
+  session_id?: string
+): Promise<{
   answer: string
   references: any[]
   query: string
+  session_id: string
 }> => {
   const response = await fetch('/api/knowledge/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, n_results })
+    body: JSON.stringify({ query, n_results, session_id })
   })
 
   if (!response.ok) {
     throw new Error(`对话失败：${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * 获取对话历史
+ */
+export const getChatHistory = async (session_id: string, limit = 50): Promise<{
+  session_id: string
+  history: Array<{
+    id: number
+    role: string
+    content: string
+    metadata: any
+    created_at: string
+  }>
+}> => {
+  const response = await fetch(`/api/knowledge/chat/history/${session_id}?limit=${limit}`)
+
+  if (!response.ok) {
+    throw new Error(`获取对话历史失败：${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * 删除对话历史
+ */
+export const deleteChatHistory = async (session_id: string): Promise<{
+  success: boolean
+  session_id: string
+  message: string
+}> => {
+  const response = await fetch(`/api/knowledge/chat/history/${session_id}`, {
+    method: 'DELETE'
+  })
+
+  if (!response.ok) {
+    throw new Error(`删除对话历史失败：${response.status}`)
   }
 
   return response.json()
@@ -233,6 +293,102 @@ export const fetchKnowledgeVideos = async (): Promise<{ videos: any[] }> => {
 
   if (!response.ok) {
     throw new Error(`获取视频列表失败：${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * 管理员登录
+ */
+export const adminLogin = async (password: string): Promise<{
+  success: boolean
+  token: string
+}> => {
+  const response = await fetch('/api/admin/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password })
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: '登录失败' }))
+    throw new Error(error.detail || '登录失败')
+  }
+
+  return response.json()
+}
+
+/**
+ * 获取所有配置（需要管理员权限）
+ */
+export const getAdminConfigs = async (token: string): Promise<{
+  configs: Record<string, string>
+}> => {
+  const response = await fetch('/api/admin/configs', {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error('获取配置失败')
+  }
+
+  return response.json()
+}
+
+/**
+ * 更新配置（需要管理员权限）
+ */
+export const updateAdminConfig = async (
+  token: string,
+  config_key: string,
+  config_value: string
+): Promise<{
+  success: boolean
+  message: string
+}> => {
+  const response = await fetch('/api/admin/configs', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ config_key, config_value })
+  })
+
+  if (!response.ok) {
+    throw new Error('更新配置失败')
+  }
+
+  return response.json()
+}
+
+/**
+ * 获取单个公开配置（如网站标题）
+ */
+export const getPublicConfig = async (config_key: string): Promise<{
+  config_key: string
+  config_value: string
+}> => {
+  const response = await fetch(`/api/admin/config/${config_key}`)
+
+  if (!response.ok) {
+    throw new Error('获取配置失败')
+  }
+
+  return response.json()
+}
+
+/**
+ * 通过 video_id 获取视频段落信息（从向量数据库直接读取）
+ */
+export const fetchVideoByVideoId = async (videoId: string): Promise<TranscriptDetailResponse> => {
+  const response = await fetch(`/api/knowledge/videos/${videoId}/paragraphs`)
+
+  if (!response.ok) {
+    throw new Error(`获取视频段落失败：${response.status}`)
   }
 
   return response.json()
