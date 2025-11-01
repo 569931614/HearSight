@@ -267,16 +267,35 @@ class PostgreSQLVectorStore:
                 cur.execute(like_sql, like_params)
                 rows = cur.fetchall()
 
-            # 格式化结果
+            # 标准化 rank 值并格式化结果
             results = []
-            for row in rows:
-                meta = row[6] if isinstance(row[6], dict) else (json.loads(row[6]) if row[6] else {})
-                results.append({
-                    "id": f"{row[1]}_{row[3]}_{row[4] if row[4] is not None else 'overall'}",
-                    "document": row[5],
-                    "metadata": meta,
-                    "distance": 1 - row[7]  # 转换 rank 为 distance
-                })
+            if rows:
+                # 获取所有 rank 值
+                ranks = [row[7] for row in rows]
+                max_rank = max(ranks) if ranks else 1.0
+                min_rank = min(ranks) if ranks else 0.0
+                rank_range = max_rank - min_rank
+
+                # 标准化 rank 并计算 distance
+                for row in rows:
+                    meta = row[6] if isinstance(row[6], dict) else (json.loads(row[6]) if row[6] else {})
+
+                    # 标准化 rank 到 0-1 范围
+                    if rank_range > 0:
+                        normalized_rank = (row[7] - min_rank) / rank_range
+                    else:
+                        # 所有结果的 rank 相同，设为最高相似度
+                        normalized_rank = 1.0
+
+                    # distance = 1 - normalized_rank (rank越高，distance越小，相似度越高)
+                    distance = 1.0 - normalized_rank
+
+                    results.append({
+                        "id": f"{row[1]}_{row[3]}_{row[4] if row[4] is not None else 'overall'}",
+                        "document": row[5],
+                        "metadata": meta,
+                        "distance": distance
+                    })
 
             cur.close()
             return results
