@@ -230,7 +230,7 @@ const RightPanel = forwardRef<HTMLDivElement, RightPanelProps>(
                                 tabIndex={0}
                                 className={`segment-btn is-div ${isActive ? 'active' : ''}`}
                                 onClick={() => handleSegmentClick(segment)}
-                                title={`跳转到 ${formatTime(segment.start_time)} (${Math.floor(Number(segment.start_time) || 0)} ms)`}
+                                title={`跳转到 ${formatTime(segment.start_time, 'ms')} (${Number(segment.start_time) || 0} ms)`}
                               >
                                 <span className="segment-icon">
                                   <PlayCircleOutlined />
@@ -238,9 +238,9 @@ const RightPanel = forwardRef<HTMLDivElement, RightPanelProps>(
                                 <div className="seg-card">
                                   <div className="seg-head">
                                     <span className="seg-time">
-                                      {formatTime(segment.start_time)}
+                                      {formatTime(segment.start_time, 'ms')}
                                       <span className="segment-time-sep">~</span>
-                                      {formatTime(segment.end_time)}
+                                      {formatTime(segment.end_time, 'ms')}
                                     </span>
                                     {segment.spk_id && (
                                       <span className="seg-spk">SPK {segment.spk_id}</span>
@@ -282,7 +282,7 @@ const RightPanel = forwardRef<HTMLDivElement, RightPanelProps>(
                           <List.Item>
                             <List.Item.Meta
                               title={item.topic || '(无主题)'}
-                              description={`时间: ${formatTime(item.start_time || 0)} ~ ${formatTime(item.end_time || 0)}`}
+                              description={`时间: ${formatTime(item.start_time || 0, 'ms')} ~ ${formatTime(item.end_time || 0, 'ms')}`}
                             />
                             <div style={{ whiteSpace: 'pre-wrap' }}>
                               <MarkdownRenderer>{item.summary || ''}</MarkdownRenderer>

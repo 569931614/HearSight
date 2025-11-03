@@ -30,12 +30,25 @@ export const parseBilibiliUrl = (input: string): ParseResult => {
 }
 
 /**
- * 格式化时间：接受毫秒为输入，返回 mm:ss 格式
+ * 格式化时间：接受秒或毫秒为输入，返回 mm:ss 格式
+ * @param timeValue - 时间值
+ * @param unit - 时间单位，'s' 表示秒，'ms' 表示毫秒。默认根据值大小自动判断
  */
-export const formatTime = (ms: number): string => {
-  // 统一将传入值视为毫秒（ms）并转换为秒用于显示
-  const msec = Math.max(0, Math.floor(Number(ms) || 0))
-  const totalSec = Math.floor(msec / 1000)
+export const formatTime = (timeValue: number, unit?: 's' | 'ms'): string => {
+  const num = Math.max(0, Number(timeValue) || 0)
+
+  // 自动判断单位：如果没有指定单位，且值小于 3600（1小时），则视为秒；否则视为毫秒
+  let totalSec: number
+  if (unit === 's') {
+    totalSec = Math.floor(num)
+  } else if (unit === 'ms') {
+    totalSec = Math.floor(num / 1000)
+  } else {
+    // 自动判断：如果值 < 3600，很可能是秒；如果 >= 3600，可能是毫秒
+    // 但由于后端现在返回秒，我们默认按秒处理
+    totalSec = Math.floor(num)
+  }
+
   const m2 = Math.floor(totalSec / 60)
   const s2 = Math.floor(totalSec % 60)
   const mm = String(m2).padStart(2, '0')
