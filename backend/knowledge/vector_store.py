@@ -387,14 +387,40 @@ def get_vector_store(persist_directory: str = None):
         persist_directory: 持久化目录路径
 
     Returns:
-        VectorStore 或 PostgreSQLVectorStore 或 VolcengineVectorClient: 向量存储实例
+        VectorStore 或 PostgreSQLVectorStore 或 VolcengineVectorClient 或 QdrantVectorStore: 向量存储实例
     """
     global _vector_store
 
-    # 检查是否使用火山引擎后端
-    use_volcengine = os.environ.get("HEARSIGHT_VECTOR_BACKEND", "").lower() == "volcengine"
+    backend = os.environ.get("HEARSIGHT_VECTOR_BACKEND", "").lower()
 
-    if use_volcengine:
+    # 检查是否使用 Qdrant 后端
+    if backend == "qdrant":
+        from backend.knowledge.qdrant_vector import QdrantVectorStore
+
+        # 从环境变量获取配置
+        qdrant_host = os.environ.get('QDRANT_HOST', 'localhost')
+        qdrant_port = int(os.environ.get('QDRANT_PORT', 6333))
+        collection_name = os.environ.get('QDRANT_COLLECTION_NAME', 'video_summaries')
+
+        # 向量化配置（火山引擎）
+        api_key = os.environ.get('VOLCENGINE_API_KEY', '')
+        base_url = os.environ.get('VOLCENGINE_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
+        embedding_model = os.environ.get('VOLCENGINE_EMBEDDING_MODEL', 'ep-20241217191853-w54rf')
+
+        if not isinstance(_vector_store, QdrantVectorStore):
+            logger.info('[vector] Using Qdrant vector backend')
+            _vector_store = QdrantVectorStore(
+                host=qdrant_host,
+                port=qdrant_port,
+                collection_name=collection_name,
+                embedding_api_key=api_key,
+                embedding_base_url=base_url,
+                embedding_model=embedding_model
+            )
+        return _vector_store
+
+    # 检查是否使用火山引擎后端
+    if backend == "volcengine":
         from backend.knowledge.volcengine_vector import VolcengineVectorClient
 
         # 从环境变量获取火山引擎配置
@@ -414,9 +440,7 @@ def get_vector_store(persist_directory: str = None):
         return _vector_store
 
     # 检查是否使用 PostgreSQL 后端
-    use_postgresql = os.environ.get("HEARSIGHT_VECTOR_BACKEND", "").lower() == "postgresql"
-
-    if use_postgresql:
+    if backend == "postgresql":
         from backend.knowledge.postgresql_vector_store import PostgreSQLVectorStore
 
         # 从环境变量获取数据库配置

@@ -1,0 +1,131 @@
+# Milvus 向量数据库服务配置
+# 用于 HearSight 大规模向量搜索
+
+version: '3.8'
+
+services:
+  # Milvus 独立模式（适合中等规模，< 1000万向量）
+  milvus-standalone:
+    image: milvusdb/milvus:v2.3.3
+    container_name: hearsight-milvus
+    restart: unless-stopped
+    ports:
+      - "19530:19530"  # gRPC
+      - "9091:9091"    # Metrics
+    environment:
+      - ETCD_USE_EMBED=true
+      - COMMON_STORAGETYPE=local
+    volumes:
+      - ./app_datas/milvus:/var/lib/milvus
+    command: milvus run standalone
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
+
+  # Attu - Milvus Web UI 管理界面（可选）
+  attu:
+    image: zilliz/attu:v2.3.3
+    container_name: hearsight-milvus-ui
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - MILVUS_URL=milvus-standalone:19530
+    depends_on:
+      - milvus-standalone
+
+# 如果需要分布式高可用集群，使用以下配置：
+# （取消注释并注释上面的 standalone 配置）
+
+#  etcd:
+#    image: quay.io/coreos/etcd:v3.5.5
+#    container_name: hearsight-milvus-etcd
+#    environment:
+#      - ETCD_AUTO_COMPACTION_MODE=revision
+#      - ETCD_AUTO_COMPACTION_RETENTION=1000
+#      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+#      - ETCD_SNAPSHOT_COUNT=50000
+#    volumes:
+#      - ./app_datas/etcd:/etcd
+#    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+#
+#  minio:
+#    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+#    container_name: hearsight-milvus-minio
+#    environment:
+#      - MINIO_ROOT_USER=minioadmin
+#      - MINIO_ROOT_PASSWORD=minioadmin
+#    volumes:
+#      - ./app_datas/minio:/minio_data
+#    command: minio server /minio_data --console-address ":9001"
+#    healthcheck:
+#      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+#      interval: 30s
+#      timeout: 20s
+#      retries: 3
+#
+#  milvus-rootcoord:
+#    image: milvusdb/milvus:v2.3.3
+#    container_name: hearsight-milvus-rootcoord
+#    command: ["milvus", "run", "rootcoord"]
+#    environment:
+#      - ETCD_ENDPOINTS=etcd:2379
+#      - MINIO_ADDRESS=minio:9000
+#    depends_on:
+#      - etcd
+#      - minio
+#
+#  milvus-proxy:
+#    image: milvusdb/milvus:v2.3.3
+#    container_name: hearsight-milvus-proxy
+#    command: ["milvus", "run", "proxy"]
+#    environment:
+#      - ETCD_ENDPOINTS=etcd:2379
+#      - MINIO_ADDRESS=minio:9000
+#    ports:
+#      - "19530:19530"
+#    depends_on:
+#      - etcd
+#      - minio
+#      - milvus-rootcoord
+#
+#  milvus-querynode:
+#    image: milvusdb/milvus:v2.3.3
+#    container_name: hearsight-milvus-querynode
+#    command: ["milvus", "run", "querynode"]
+#    environment:
+#      - ETCD_ENDPOINTS=etcd:2379
+#      - MINIO_ADDRESS=minio:9000
+#    depends_on:
+#      - etcd
+#      - minio
+#
+#  milvus-datanode:
+#    image: milvusdb/milvus:v2.3.3
+#    container_name: hearsight-milvus-datanode
+#    command: ["milvus", "run", "datanode"]
+#    environment:
+#      - ETCD_ENDPOINTS=etcd:2379
+#      - MINIO_ADDRESS=minio:9000
+#    depends_on:
+#      - etcd
+#      - minio
+#
+#  milvus-indexnode:
+#    image: milvusdb/milvus:v2.3.3
+#    container_name: hearsight-milvus-indexnode
+#    command: ["milvus", "run", "indexnode"]
+#    environment:
+#      - ETCD_ENDPOINTS=etcd:2379
+#      - MINIO_ADDRESS=minio:9000
+#    depends_on:
+#      - etcd
+#      - minio
+
+volumes:
+  milvus_data:
+  etcd_data:
+  minio_data:

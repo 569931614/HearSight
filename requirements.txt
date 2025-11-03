@@ -11,3 +11,5 @@ fastapi
 uvicorn
 PyYAML
 psycopg2-binary
+# Qdrant 向量数据库客户端
+qdrant-client>=1.7.0
