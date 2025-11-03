@@ -91,7 +91,7 @@ export const fetchTranscriptDetail = async (id: number): Promise<TranscriptDetai
  * 根据 media_path 获取 transcript_id
  */
 export const fetchTranscriptIdByPath = async (mediaPath: string): Promise<number> => {
-  const response = await fetch(`/api/transcripts/by-path?media_path=${encodeURIComponent(mediaPath)}`)
+  const response = await fetch(`/api/lookup/transcript?media_path=${encodeURIComponent(mediaPath)}`)
 
   if (!response.ok) {
     throw new Error(`未找到对应的转写记录：${response.status}`)

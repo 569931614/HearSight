@@ -618,13 +618,25 @@ class VolcengineVectorClient:
             from backend.knowledge.knowledge_service import _infer_static_url
             static_url = _infer_static_url(video_path)
 
-            # 构建段落列表（前端需要的格式）
+            # 构建段落列表（前端需要的格式，时间单位：毫秒）
             segments = []
-            for para in paragraphs_data:
+            for idx, para in enumerate(paragraphs_data):
+                # 时间戳可能以秒或毫秒存储，统一转换为毫秒
+                start_time = float(para.get('start_time', 0))
+                end_time = float(para.get('end_time', 0))
+
+                # 如果时间戳看起来是秒（通常 < 100000），转换为毫秒
+                if start_time > 0 and start_time < 100000:
+                    start_time = start_time * 1000
+                if end_time > 0 and end_time < 100000:
+                    end_time = end_time * 1000
+
                 segments.append({
-                    "text": para.get('text', ''),
-                    "start_time": float(para.get('start_time', 0)),
-                    "end_time": float(para.get('end_time', 0))
+                    "index": idx,
+                    "spk_id": para.get('spk_id'),
+                    "sentence": para.get('text', ''),
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
 
             result = {

@@ -474,15 +474,27 @@ class PostgreSQLVectorStore:
             """, (video_id,))
             paragraph_rows = cur.fetchall()
 
-            # 转换为前端需要的格式
+            # 转换为前端需要的格式（时间单位：毫秒）
             segments = []
             for row in paragraph_rows:
                 meta = row[1] if isinstance(row[1], dict) else (json.loads(row[1]) if row[1] else {})
+
+                # 时间戳可能以秒或毫秒存储，统一转换为毫秒
+                start_time = float(meta.get("start_time", 0.0))
+                end_time = float(meta.get("end_time", 0.0))
+
+                # 如果时间戳看起来是秒（通常 < 100000），转换为毫秒
+                if start_time > 0 and start_time < 100000:
+                    start_time = start_time * 1000
+                if end_time > 0 and end_time < 100000:
+                    end_time = end_time * 1000
+
                 segments.append({
-                    "text": row[0],
-                    "start_time": meta.get("start_time", 0.0),
-                    "end_time": meta.get("end_time", 0.0),
-                    "index": meta.get("index", 0)
+                    "index": meta.get("index", 0),
+                    "spk_id": meta.get("spk_id"),
+                    "sentence": row[0],
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
 
             # 推导静态 URL

@@ -309,11 +309,37 @@ def get_transcript_by_id(db_url: Optional[str], transcript_id: int) -> Optional[
                     segs = json.loads(row["segments_json"])
                 except Exception:
                     segs = []
+
+                # 规范化 segments 格式以匹配前端期望
+                # 前端期望: {index, spk_id, sentence, start_time (ms), end_time (ms)}
+                normalized_segs = []
+                for idx, seg in enumerate(segs):
+                    # 如果是旧格式（有 text 字段），转换为新格式
+                    if isinstance(seg, dict):
+                        # 时间戳可能以秒或毫秒存储，统一转换为毫秒
+                        start_time = float(seg.get("start_time", 0))
+                        end_time = float(seg.get("end_time", 0))
+
+                        # 如果时间戳看起来是秒（通常 < 10000），转换为毫秒
+                        if start_time > 0 and start_time < 100000:
+                            start_time = start_time * 1000
+                        if end_time > 0 and end_time < 100000:
+                            end_time = end_time * 1000
+
+                        normalized_seg = {
+                            "index": seg.get("index", idx),
+                            "spk_id": seg.get("spk_id"),
+                            "sentence": seg.get("sentence") or seg.get("text", ""),
+                            "start_time": start_time,
+                            "end_time": end_time
+                        }
+                        normalized_segs.append(normalized_seg)
+
                 return {
                     "id": int(row["id"]),
                     "media_path": str(row["media_path"]),
                     "created_at": str(row["created_at"]),
-                    "segments": segs,
+                    "segments": normalized_segs,
                 }
     finally:
         conn.close()

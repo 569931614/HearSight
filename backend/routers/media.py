@@ -33,6 +33,12 @@ router = APIRouter(prefix="/api", tags=["media"])
 def _build_static_url(static_dir: Path, media_path: Optional[str]) -> Optional[str]:
     if not media_path:
         return None
+
+    # 如果是 HTTP/HTTPS URL，直接返回原 URL
+    if media_path.startswith(('http://', 'https://')):
+        return media_path
+
+    # 本地文件：转换为 /static/ 路径
     try:
         media = Path(media_path).resolve()
         base = static_dir.resolve()
@@ -175,6 +181,19 @@ def api_list_transcripts(request: Request, limit: int = 50, offset: int = 0) -> 
     return {"total": total, "items": enriched}
 
 
+@router.get("/lookup/transcript")
+def api_get_transcript_id_by_path(request: Request, media_path: str = Query(..., description="视频文件的完整路径")) -> Dict[str, Any]:
+    """根据 media_path 查找对应的 transcript_id"""
+    db_url = request.app.state.db_url
+    logging.info(f"[lookup] 查询路径: {media_path}")
+    transcript_id = get_transcript_id_by_path(db_url, media_path)
+    if transcript_id is None:
+        logging.warning(f"[lookup] 未找到匹配的转写记录: {media_path}")
+        raise HTTPException(status_code=422, detail=f"未找到对应的转写记录")
+    logging.info(f"[lookup] 找到转写记录: transcript_id={transcript_id}")
+    return {"transcript_id": transcript_id, "media_path": media_path}
+
+
 @router.get("/transcripts/{transcript_id}")
 def api_get_transcript(transcript_id: int, request: Request) -> Dict[str, Any]:
     """获取指定转写记录的详情（包含 segments）。"""
@@ -186,19 +205,6 @@ def api_get_transcript(transcript_id: int, request: Request) -> Dict[str, Any]:
 
     data["static_url"] = _build_static_url(static_dir, data.get("media_path"))
     return data
-
-
-@router.get("/transcripts/by-path")
-def api_get_transcript_id_by_path(request: Request, media_path: str = Query(..., description="视频文件的完整路径")) -> Dict[str, Any]:
-    """根据 media_path 查找对应的 transcript_id"""
-    db_url = request.app.state.db_url
-    logger.info(f"[by-path] 查询路径: {media_path}")
-    transcript_id = get_transcript_id_by_path(db_url, media_path)
-    if transcript_id is None:
-        logger.warning(f"[by-path] 未找到匹配的转写记录: {media_path}")
-        raise HTTPException(status_code=422, detail=f"未找到对应的转写记录")
-    logger.info(f"[by-path] 找到转写记录: transcript_id={transcript_id}")
-    return {"transcript_id": transcript_id, "media_path": media_path}
 
 
 @router.post("/jobs")
@@ -435,3 +441,4 @@ def api_import_from_pyvideotrans(payload: Dict[str, Any], request: Request) -> D
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+

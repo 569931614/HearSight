@@ -17,7 +17,7 @@ print()
 ADMIN_HOST = "117.72.164.82"
 ADMIN_PORT = "5433"
 ADMIN_USER = "admin"
-ADMIN_PASSWORD = "Pg@Admin#2025!Secure"
+ADMIN_PASSWORD = "Admin@123"
 
 # 新数据库配置
 NEW_DB_NAME = "hearsight"
