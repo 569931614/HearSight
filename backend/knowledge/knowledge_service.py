@@ -438,7 +438,7 @@ def get_video_paragraphs_by_video_id(
         return result
 
     except AttributeError:
-        # 如果向量存储不支持此方法（例如 ChromaDB），返回 None
+        # 向量存储不支持此方法
         logger.error(f"当前向量存储后端不支持通过 video_id 查询")
         return None
     except Exception as e:

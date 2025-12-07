@@ -183,7 +183,7 @@ export const fetchAllSummaries = async (limit = 50, offset = 0): Promise<{ items
 }
 
 /**
- * 基于知识库的对话
+ * 基于知识库的对话 - 使用 Qdrant RAG
  */
 export const chatWithKnowledge = async (
   query: string,
@@ -193,19 +193,34 @@ export const chatWithKnowledge = async (
   answer: string
   references: any[]
   query: string
-  session_id: string
+  session_id?: string
 }> => {
-  const response = await fetch('/api/knowledge/chat', {
+  console.log('[API] Calling Qdrant RAG chat:', { query, n_results, session_id })
+
+  const response = await fetch('/api/qdrant/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, n_results, session_id })
+    body: JSON.stringify({
+      query,
+      n_results,
+      session_id,
+      score_threshold: 0.4  // 降低阈值以匹配更多结果
+    })
   })
 
+  console.log('[API] Response status:', response.status)
+
   if (!response.ok) {
-    throw new Error(`对话失败：${response.status}`)
+    const errorText = await response.text()
+    console.error('[API] Error response:', errorText)
+    throw new Error(`对话失败：${response.status} - ${errorText}`)
   }
 
-  return response.json()
+  const result = await response.json()
+  console.log('[API] Success result:', result)
+
+  // 返回结果,session_id 已由后端返回
+  return result
 }
 
 /**
@@ -299,6 +314,57 @@ export const fetchKnowledgeVideos = async (): Promise<{ videos: any[] }> => {
 }
 
 /**
+ * 获取 Qdrant 文件夹列表
+ */
+export const fetchQdrantFolders = async (): Promise<{
+  folders: any[]
+  total: number
+}> => {
+  const response = await fetch('/api/qdrant/folders')
+
+  if (!response.ok) {
+    throw new Error(`获取文件夹列表失败：${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * 从 Qdrant 获取最新的视频列表 (pyvideotrans 导出的数据)
+ */
+export const fetchQdrantVideos = async (
+  page: number = 1,
+  pageSize: number = 20,
+  folderId?: string
+): Promise<{
+  videos: any[]
+  pagination: {
+    page: number
+    page_size: number
+    total: number
+    total_pages: number
+  }
+  cached?: boolean
+}> => {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString()
+  })
+
+  if (folderId) {
+    params.append('folder_id', folderId)
+  }
+
+  const response = await fetch(`/api/qdrant/videos?${params}`)
+
+  if (!response.ok) {
+    throw new Error(`获取 Qdrant 视频列表失败：${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
  * 管理员登录
  */
 export const adminLogin = async (password: string): Promise<{
@@ -382,10 +448,10 @@ export const getPublicConfig = async (config_key: string): Promise<{
 }
 
 /**
- * 通过 video_id 获取视频段落信息（从向量数据库直接读取）
+ * 通过 video_id 获取视频段落信息（从 Qdrant 向量数据库直接读取）
  */
 export const fetchVideoByVideoId = async (videoId: string): Promise<TranscriptDetailResponse> => {
-  const response = await fetch(`/api/knowledge/videos/${videoId}/paragraphs`)
+  const response = await fetch(`/api/qdrant/videos/${videoId}/paragraphs`)
 
   if (!response.ok) {
     throw new Error(`获取视频段落失败：${response.status}`)

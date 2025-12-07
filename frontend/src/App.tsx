@@ -3,7 +3,7 @@ import './index.css'
 import { Layout, Typography, Button, Space, Tag, Modal, App as AntdApp } from 'antd'
 import { CloseOutlined, LeftOutlined, MessageOutlined, SettingOutlined } from '@ant-design/icons'
 import { extractFilename, seekVideoTo } from './utils'
-import { fetchTranscriptDetail, fetchSummariesByTranscript, fetchAllSummaries, getPublicConfig, fetchTranscriptIdByPath, fetchVideoByVideoId } from './services/api'
+import { fetchTranscriptDetail, fetchAllSummaries, fetchQdrantVideos, getPublicConfig, fetchTranscriptIdByPath, fetchVideoByVideoId } from './services/api'
 import type { Segment, SummaryMeta, TranscriptDetailResponse } from './types'
 import LeftPanel from './components/LeftPanel'
 import VideoPlayer from './components/VideoPlayer'
@@ -33,7 +33,12 @@ function App() {
   const [activeSegIndex, setActiveSegIndex] = useState<number | null>(null)
   const [activeTranscriptId, setActiveTranscriptId] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState<boolean>(true) // 默认开启自动滚动
-  const [savedSummaries, setSavedSummaries] = useState<Array<any>>([]) // 保存的摘要
+  const [videoSummary, setVideoSummary] = useState<string | null>(null) // 视频全文总结
+
+  // 分页状态
+  const [currentPage, setCurrentPage] = useState<number>(1)
+  const [pageSize, setPageSize] = useState<number>(20)
+  const [totalVideos, setTotalVideos] = useState<number>(0)
 
   // 全屏布局状态
   const [leftPanelVisible, setLeftPanelVisible] = useState(true) // 默认显示侧边栏
@@ -55,13 +60,31 @@ function App() {
   const prevActiveRef = useRef<number | null>(null)
 
   // 获取摘要列表
-  const loadSummaries = async () => {
+  const loadSummaries = async (page: number = currentPage) => {
     try {
-      const data = await fetchAllSummaries()
-      setSummaries(Array.isArray(data.items) ? data.items : [])
+      // 使用新的 Qdrant API 获取最新视频列表（带分页）
+      const data = await fetchQdrantVideos(page, pageSize)
+      setSummaries(Array.isArray(data.videos) ? data.videos : [])
+      if (data.pagination) {
+        setTotalVideos(data.pagination.total)
+        setCurrentPage(data.pagination.page)
+      }
     } catch (err: any) {
-      console.warn('获取摘要列表失败:', err?.message || err)
+      console.warn('获取热门视频列表失败:', err?.message || err)
+      // 如果 Qdrant 失败，尝试回退到 PostgreSQL summaries
+      try {
+        const fallbackData = await fetchAllSummaries()
+        setSummaries(Array.isArray(fallbackData.items) ? fallbackData.items : [])
+      } catch (fallbackErr: any) {
+        console.warn('获取摘要列表失败:', fallbackErr?.message || fallbackErr)
+      }
     }
+  }
+
+  // 处理分页变化
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page)
+    loadSummaries(page)
   }
 
   // 从 localStorage 加载会话列表
@@ -154,36 +177,40 @@ function App() {
     saveSessions(updatedSessions)
   }
 
-  // 加载转写记录详情
-  const loadTranscriptDetail = async (id: number): Promise<TranscriptDetailResponse | undefined> => {
-    console.log('loadTranscriptDetail called with id:', id)
+  // 加载转写记录详情 (支持 transcript_id 或 video_id)
+  const loadTranscriptDetail = async (id: number | string): Promise<TranscriptDetailResponse | undefined> => {
     try {
       setLoading(true)
-      const data = await fetchTranscriptDetail(id)
-      console.log('fetchTranscriptDetail response:', data)
-      console.log('data.segments:', data.segments)
+
+      let data: TranscriptDetailResponse
+
+      // 判断是 transcript_id (number) 还是 video_id (string)
+      if (typeof id === 'string') {
+        // video_id - 从 Qdrant 加载
+        data = await fetchVideoByVideoId(id)
+      } else {
+        // transcript_id - 从 PostgreSQL 加载
+        data = await fetchTranscriptDetail(id)
+      }
+
+      // 保存视频总结（如果有）
+      if (typeof id === 'string' && (data as any).video_summary) {
+        setVideoSummary((data as any).video_summary)
+      } else {
+        setVideoSummary(null)
+      }
+
       const basename = extractFilename(data.media_path)
       const resolvedStatic = data.static_url || (basename ? `/static/${basename}` : null)
       if (resolvedStatic) {
         setVideoSrc(resolvedStatic)
       }
       const segmentsArray = Array.isArray(data.segments) ? data.segments : []
-      console.log('Setting segments to:', segmentsArray.length, 'items')
       setSegments(segmentsArray)
-      setActiveTranscriptId(id)
 
-      // 从专门的摘要 API 获取摘要数据
-      try {
-        const summaryData = await fetchSummariesByTranscript(id)
-        console.log('fetchSummariesByTranscript response:', summaryData)
-        console.log('summaryData.summaries:', summaryData.summaries)
-        const summariesArray = summaryData.summaries || []
-        console.log('Setting savedSummaries to:', summariesArray.length, 'items')
-        setSavedSummaries(summariesArray)
-      } catch (err: any) {
-        console.warn('获取摘要失败:', err?.message || err)
-        setSavedSummaries([])
-      }
+      // 对于 Qdrant 视频，我们没有 transcript_id，使用 video_id 的哈希值作为标识
+      const transcriptId = typeof id === 'string' ? -1 : id
+      setActiveTranscriptId(transcriptId)
 
       // 打开视频播放器弹窗
       setVideoModalVisible(true)
@@ -257,11 +284,9 @@ function App() {
     return () => v.removeEventListener('timeupdate', onTimeUpdate)
   }, [segments, autoScroll])
 
-  // 定期获取数据
+  // 初始加载数据（仅一次）
   useEffect(() => {
     void loadSummaries()
-    const timer = setInterval(() => { void loadSummaries() }, 10000)
-    return () => clearInterval(timer)
   }, [])
 
   // 加载网站标题
@@ -321,6 +346,10 @@ function App() {
                 onNewSession={handleNewSession}
                 onDeleteSession={handleDeleteSession}
                 currentSessionId={currentSessionId}
+                currentPage={currentPage}
+                pageSize={pageSize}
+                totalVideos={totalVideos}
+                onPageChange={handlePageChange}
               />
             </div>
           </div>
@@ -333,7 +362,6 @@ function App() {
               currentSessionId={currentSessionId}
               onSessionChange={handleSessionChange}
               onVideoSeek={async ({ videoPath, staticUrl, transcriptId, videoId, startTime }) => {
-                console.log('onVideoSeek called with:', { videoPath, staticUrl, transcriptId, videoId, startTime })
                 const startSeconds = Number(startTime ?? 0)
                 try {
                   let effectiveStatic = staticUrl || null
@@ -342,10 +370,8 @@ function App() {
 
                   // 如果没有 transcript_id，尝试通过 video_path 查找
                   if (!effectiveTranscriptId && videoPath) {
-                    console.log('No transcriptId, trying to fetch by video_path:', videoPath)
                     try {
                       effectiveTranscriptId = await fetchTranscriptIdByPath(videoPath)
-                      console.log('Found transcriptId:', effectiveTranscriptId)
                     } catch (error: any) {
                       console.warn('Failed to fetch transcript_id by path:', error)
                       // 继续执行，尝试使用 videoId
@@ -354,14 +380,12 @@ function App() {
 
                   // 如果仍然没有 transcript_id，但有 videoId，尝试通过 videoId 加载
                   if (!effectiveTranscriptId && videoId) {
-                    console.log('No transcriptId, trying to fetch by videoId:', videoId)
                     try {
                       const data = await fetchVideoByVideoId(videoId)
-                      console.log('Loaded video by videoId:', data)
                       // 直接设置 segments 和相关状态
                       setSegments(data.segments || [])
                       setActiveTranscriptId(undefined) // 没有 transcript_id
-                      setSavedSummaries([])
+                      setVideoSummary((data as any).video_summary || null)
                       effectiveStatic = data.static_url || effectiveStatic
                       loadedByVideoId = true
                     } catch (error: any) {
@@ -371,17 +395,11 @@ function App() {
                   }
 
                   if (effectiveTranscriptId) {
-                    console.log('transcriptId exists:', effectiveTranscriptId, 'activeTranscriptId:', activeTranscriptId)
                     // 有 transcript_id，加载完整的转写记录（包含所有分句和摘要）
                     if (effectiveTranscriptId !== activeTranscriptId) {
-                      console.log('Loading transcript detail for:', effectiveTranscriptId)
                       const data = await loadTranscriptDetail(effectiveTranscriptId)
-                      console.log('loadTranscriptDetail returned:', data)
-                      console.log('segments count:', segments.length, 'savedSummaries count:', savedSummaries.length)
                       effectiveStatic = data?.static_url || effectiveStatic
                     } else {
-                      console.log('Transcript already loaded, just opening panel')
-                      console.log('Current segments count:', segments.length, 'savedSummaries count:', savedSummaries.length)
                       // 已经加载了该视频，只需要更新视频源（如果需要）
                       if (staticUrl && staticUrl !== videoSrc) {
                         setVideoSrc(staticUrl)
@@ -398,7 +416,6 @@ function App() {
                       handleSeekTo(startSeconds * 1000)
                     }, 500)
                   } else if (loadedByVideoId) {
-                    console.log('Loaded by videoId, opening video panel')
                     // 通过 videoId 加载成功，打开视频面板
                     setVideoModalVisible(true)
                     setRightPanelVisible(true)
@@ -409,7 +426,6 @@ function App() {
                       handleSeekTo(startSeconds * 1000)
                     }, 500)
                   } else {
-                    console.log('No transcriptId or videoId available - playing video only without segments')
                     // 没有 transcript_id 也没有通过 videoId 加载，只播放视频（不显示分句和摘要）
                     if (!effectiveStatic && videoPath) {
                       const basename = extractFilename(videoPath)
@@ -419,7 +435,6 @@ function App() {
                     }
                     if (effectiveStatic && effectiveStatic !== videoSrc) {
                       setVideoSrc(effectiveStatic)
-                      console.log('Setting video source:', effectiveStatic)
                     }
 
                     // 打开视频弹窗（不显示右侧面板，因为没有分句数据）
@@ -470,7 +485,7 @@ function App() {
         width="90%"
         style={{ top: 20 }}
         footer={null}
-        destroyOnClose={false}
+        destroyOnHidden={false}
       >
         <div style={{ display: 'flex', gap: '16px', height: '80vh' }}>
           {/* 左侧视频播放器 */}
@@ -482,31 +497,16 @@ function App() {
             />
           </div>
 
-          {/* 右侧分句与总结 */}
+          {/* 右侧面板 */}
           {rightPanelVisible && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <div style={{
-                padding: '8px 12px',
-                borderBottom: '1px solid #f0f0f0',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <span style={{ fontWeight: 500 }}>分句与总结</span>
-                <Button
-                  type="text"
-                  icon={<CloseOutlined />}
-                  onClick={() => setRightPanelVisible(false)}
-                  size="small"
-                />
-              </div>
               <div style={{ flex: 1, overflow: 'auto' }}>
                 <RightPanel
                   ref={segScrollRef}
                   segments={segments}
                   activeSegIndex={activeSegIndex}
                   autoScroll={autoScroll}
-                  savedSummaries={savedSummaries}
+                  videoSummary={videoSummary}
                   onSeekTo={handleSeekTo}
                   onActiveSegmentChange={setActiveSegIndex}
                   onAutoScrollChange={setAutoScroll}

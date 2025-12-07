@@ -11,10 +11,12 @@ from fastapi.staticfiles import StaticFiles
 from config import get_config, load_config
 from backend.db.pg_store import init_db, claim_next_pending_job, finish_job_success, finish_job_failed, save_summaries
 from backend.utils.vedio_utils.download_video.download_bilibili import download_bilibili
+from backend.utils.oss_client import get_oss_client, upload_video_to_oss
 from backend.audio2text.asr_sentence_segments import process as asr_process
 from backend.routers.media import router as media_router
 from backend.routers.knowledge import router as knowledge_router
 from backend.routers.admin import router as admin_router
+from backend.routers.qdrant_rag import router as qdrant_rag_router
 
 
 
@@ -82,6 +84,7 @@ app.state.shared_media_dir = download_video_path
 app.include_router(media_router)
 app.include_router(knowledge_router)
 app.include_router(admin_router)
+app.include_router(qdrant_rag_router)
 
 
 # 启动后台worker：简单串行处理下载+ASR+摘要，避免阻塞请求线程
@@ -114,38 +117,66 @@ def _job_worker(app: FastAPI) -> None:
 
             # Step A: 下载阶段（若无 media_path 或文件不存在，则执行下载并写入进度）
             media_path = res.get("media_path")
-            if not media_path or not Path(str(media_path)).exists():
+            local_media_path = None  # 本地文件路径，用于 ASR 处理
+            if not media_path or (not media_path.startswith(('http://', 'https://')) and not Path(str(media_path)).exists()):
                 logger.info(f"任务 #{job_id}: 开始下载视频...")
                 update_job_result(db_url, job_id, {"progress": 10, "stage": "下载视频中..."})
                 files = download_bilibili(url=url, out_dir=str(static_dir), use_nopart=True, simple_filename=True)
                 if not files:
                     raise RuntimeError("下载结果为空")
-                media_path = str(Path(files[0]).resolve())
-                basename = Path(media_path).name
+                local_media_path = str(Path(files[0]).resolve())
+                basename = Path(local_media_path).name
                 logger.info(f"任务 #{job_id}: 视频下载完成: {basename}")
+
+                # 尝试上传到 OSS
+                oss_client = get_oss_client()
+                if oss_client.is_enabled():
+                    logger.info(f"任务 #{job_id}: 开始上传视频到 OSS...")
+                    update_job_result(db_url, job_id, {"progress": 20, "stage": "上传到 OSS 中..."})
+                    oss_result = upload_video_to_oss(local_media_path)
+                    if oss_result["success"]:
+                        media_path = oss_result["url"]
+                        static_url = oss_result["url"]
+                        logger.info(f"任务 #{job_id}: OSS 上传成功: {static_url}")
+                    else:
+                        logger.warning(f"任务 #{job_id}: OSS 上传失败: {oss_result['error']}，使用本地路径")
+                        media_path = local_media_path
+                        static_url = f"/static/{basename}"
+                else:
+                    media_path = local_media_path
+                    static_url = f"/static/{basename}"
+                    logger.info(f"任务 #{job_id}: OSS 未启用，使用本地存储")
+
                 res.update({
                     "media_path": media_path,
+                    "local_media_path": local_media_path,
                     "basename": basename,
-                    "static_url": f"/static/{basename}",
+                    "static_url": static_url,
                     "progress": 30,
                     "stage": "下载完成"
                 })
                 update_job_result(db_url, job_id, {
                     "media_path": media_path,
+                    "local_media_path": local_media_path,
                     "basename": basename,
-                    "static_url": f"/static/{basename}",
+                    "static_url": static_url,
                     "progress": 30,
                     "stage": "下载完成"
                 })
             else:
-                basename = Path(str(media_path)).name
+                basename = Path(str(media_path)).name if not media_path.startswith(('http://', 'https://')) else res.get("basename", "video.mp4")
+                local_media_path = res.get("local_media_path") or (media_path if not media_path.startswith(('http://', 'https://')) else None)
                 logger.info(f"任务 #{job_id}: 使用已下载的视频: {basename}")
 
             # Step B: ASR 阶段（若无 transcript_id，则执行识别与保存）
             if not res.get("transcript_id"):
                 logger.info(f"任务 #{job_id}: 开始语音识别...")
                 update_job_result(db_url, job_id, {"progress": 40, "stage": "语音识别中..."})
-                segs = asr_process(str(media_path))
+                # ASR 需要使用本地文件路径
+                asr_path = local_media_path or media_path
+                if asr_path.startswith(('http://', 'https://')):
+                    raise RuntimeError(f"ASR 需要本地文件，但只有远程 URL: {asr_path}")
+                segs = asr_process(str(asr_path))
                 logger.info(f"任务 #{job_id}: 识别完成，共 {len(segs)} 个分句")
                 transcript_id = save_transcript(db_url, str(media_path), segs)
                 logger.info(f"任务 #{job_id}: 转写记录已保存，ID={transcript_id}")
@@ -261,4 +292,4 @@ if __name__ == "__main__":
     else:
         # 优先使用 pydantic Config 的 BACKEND_PORT 字段，其次回退到 8000
         port = int(cfg.BACKEND_PORT) if getattr(cfg, "BACKEND_PORT", None) else 8000
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

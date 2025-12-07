@@ -283,12 +283,45 @@ export default function ChatPanel({
                       size="small"
                       dataSource={msg.references}
                       renderItem={(ref: any, refIndex: number) => {
-                        const meta = ref.metadata || {}
-                        const videoName = meta.video_path?.split('/').pop()?.split('\\').pop() || '未知视频'
-                        const distance = Number(ref.distance ?? 0)
-                        const similarity = ((1 - distance) * 100).toFixed(1)
-                        const startSeconds = Number(meta.start_time ?? 0)
-                        const endSeconds = Number(meta.end_time ?? 0)
+                        // 兼容两种格式：旧格式(metadata) 和 Qdrant RAG 格式
+                        // Qdrant 格式: { chunk_text, score, metadata: { video_title, ... } }
+                        // 旧格式: { document, distance, metadata: { video_path, ... } }
+                        const isQdrantFormat = ref.chunk_text !== undefined
+
+                        // 调试日志
+                        if (refIndex === 0) {
+                          console.log('First reference data:', JSON.stringify(ref, null, 2))
+                          console.log('Is Qdrant format:', isQdrantFormat)
+                        }
+
+                        let videoName: string
+                        let similarity: string
+                        let startSeconds: number
+                        let endSeconds: number
+                        let contentText: string
+
+                        if (isQdrantFormat) {
+                          // Qdrant RAG 格式
+                          const meta = ref.metadata || {}
+                          videoName = meta.video_title || '未知视频'
+                          similarity = ((ref.score || 0) * 100).toFixed(1)
+                          startSeconds = Number(meta.start_time ?? 0)
+                          endSeconds = Number(meta.end_time ?? 0)
+                          contentText = ref.chunk_text || meta.summary || ''
+
+                          if (refIndex === 0) {
+                            console.log('Qdrant format parsed:', { videoName, similarity, startSeconds, endSeconds, contentTextLen: contentText.length })
+                          }
+                        } else {
+                          // 旧格式 (PostgreSQL)
+                          const meta = ref.metadata || {}
+                          videoName = meta.video_path?.split('/').pop()?.split('\\').pop() || '未知视频'
+                          const distance = Number(ref.distance ?? 0)
+                          similarity = ((1 - distance) * 100).toFixed(1)
+                          startSeconds = Number(meta.start_time ?? 0)
+                          endSeconds = Number(meta.end_time ?? 0)
+                          contentText = ref.document || ''
+                        }
 
                         return (
                           <List.Item
@@ -298,14 +331,18 @@ export default function ChatPanel({
                           >
                             <div className="reference-header">
                               <Tag color="blue">相似度: {similarity}%</Tag>
-                              {meta.type === 'paragraph' && (
-                                <Tag color="green">
-                                  <ClockCircleOutlined /> {formatTime(startSeconds)} - {formatTime(endSeconds)}
-                                </Tag>
-                              )}
+                              <Tag color="green">
+                                <ClockCircleOutlined /> {formatTime(startSeconds)} - {formatTime(endSeconds)}
+                              </Tag>
                             </div>
                             <div className="reference-video">{videoName}</div>
-                            <div className="reference-text">{ref.document?.substring(0, 100)}...</div>
+                            <div className="reference-text">
+                              {contentText.length > 0 ? (
+                                contentText.length > 100 ? `${contentText.substring(0, 100)}...` : contentText
+                              ) : (
+                                '(无内容)'
+                              )}
+                            </div>
                           </List.Item>
                         )
                       }}

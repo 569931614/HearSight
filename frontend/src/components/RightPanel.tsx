@@ -1,4 +1,4 @@
-import React, { useState, forwardRef, type ForwardedRef } from 'react'
+import React, { forwardRef, type ForwardedRef } from 'react'
 import {
   Card,
   Tabs,
@@ -6,24 +6,22 @@ import {
   Space,
   Empty,
   List,
-  Alert,
 } from 'antd'
-import { 
-  UpOutlined, 
-  DownOutlined, 
-  SyncOutlined, 
-  PlayCircleOutlined 
+import {
+  UpOutlined,
+  DownOutlined,
+  SyncOutlined,
+  PlayCircleOutlined
 } from '@ant-design/icons'
-import type { Segment, Summary } from '../types'
+import type { Segment } from '../types'
 import { formatTime } from '../utils'
-import { generateSummary } from '../services/api'
 import MarkdownRenderer from './MarkdownRenderer'
 
 interface RightPanelProps {
   segments: Segment[]
   activeSegIndex: number | null
   autoScroll: boolean
-  savedSummaries?: Summary[]
+  videoSummary?: string | null
   onSeekTo: (timeMs: number) => void
   onActiveSegmentChange: (index: number) => void
   onAutoScrollChange: (enabled: boolean) => void
@@ -34,95 +32,11 @@ const RightPanel = forwardRef<HTMLDivElement, RightPanelProps>(
     segments,
     activeSegIndex,
     autoScroll,
-    savedSummaries = [],
+    videoSummary = null,
     onSeekTo,
     onActiveSegmentChange,
     onAutoScrollChange
   }, ref: ForwardedRef<HTMLDivElement>) => {
-    const [summaries, setSummaries] = useState<Summary[]>([])
-    const [summariesLoading, setSummariesLoading] = useState(false)
-    const [summariesError, setSummariesError] = useState<string | null>(null)
-
-    // 当 savedSummaries 变化时，更新 summaries
-    React.useEffect(() => {
-      if (savedSummaries && savedSummaries.length > 0) {
-        setSummaries(savedSummaries)
-        setSummariesError(null)
-      }
-    }, [savedSummaries])
-
-    const handleGenerateSummary = async () => {
-      setSummariesError(null)
-      setSummaries([])
-      
-      if (!segments || segments.length === 0) {
-        setSummariesError('没有可用的分句，请先打开某个转写记录')
-        return
-      }
-      
-      setSummariesLoading(true)
-      try {
-        const data = await generateSummary(segments)
-        
-        // 后端可能返回两种格式：直接的数组或 { summaries: [...] }
-        let items: any[] = []
-        if (Array.isArray(data)) {
-          items = data
-        } else if (Array.isArray(data.summaries)) {
-          items = data.summaries
-        }
-
-        // 规范化每条 summary：若 summary 字段本身包含 code fence JSON 或是 JSON 字符串，解析并替换为真实 summary 字符串
-        const normalize = (item: any) => {
-          const result = { ...item }
-          let s = String(result.summary || '')
-          
-          // 如果是代码块包裹（```json\n{...}```），提取内部并尝试解析 JSON
-          const codeFenceMatch = s.match(/```(?:json)?\s*\n([\s\S]*)\n```/i)
-          if (codeFenceMatch) {
-            const inner = codeFenceMatch[1].trim()
-            try {
-              const obj = JSON.parse(inner)
-              if (obj && typeof obj.summary === 'string') {
-                result.summary = obj.summary
-                if (!result.topic && obj.topic) result.topic = obj.topic
-                return result
-              }
-              // 如果 obj 本身是字符串或其他，则回退为 inner
-              result.summary = inner
-              return result
-            } catch (e) {
-              // 解析失败则使用 inner 文本
-              result.summary = inner
-              return result
-            }
-          }
-
-          // 如果 summary 看起来像一个 JSON 字符串（以 { 开头），尝试解析
-          if (s.trim().startsWith('{')) {
-            try {
-              const obj = JSON.parse(s)
-              if (obj && typeof obj.summary === 'string') {
-                result.summary = obj.summary
-                if (!result.topic && obj.topic) result.topic = obj.topic
-              } else {
-                // 如果不是期望结构，则转为漂亮的 JSON 文本
-                result.summary = JSON.stringify(obj, null, 2)
-              }
-            } catch (e) {
-              // ignore
-            }
-          }
-          return result
-        }
-
-        setSummaries(items.map(normalize))
-      } catch (err: any) {
-        setSummariesError(err?.message || '调用总结接口失败')
-      } finally {
-        setSummariesLoading(false)
-      }
-    }
 
     const handleSegmentClick = (segment: Segment) => {
       onActiveSegmentChange(segment.index)
@@ -258,39 +172,24 @@ const RightPanel = forwardRef<HTMLDivElement, RightPanelProps>(
                 </div>
               </Tabs.TabPane>
               <Tabs.TabPane tab="总结" key="summaries" forceRender>
-                <div style={{ padding: 8, display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
-                  <Button
-                    size="small"
-                    type="primary"
-                    onClick={handleGenerateSummary}
-                    loading={summariesLoading}
-                  >
-                    生成总结
-                  </Button>
-
-                  <div style={{ marginTop: 8 }}>
-                    {summariesLoading && <div>生成中，请稍候…</div>}
-                    {summariesError && <Alert type="error" message={summariesError} showIcon />}
-                    {!summariesLoading && !summariesError && summaries.length === 0 && (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无总结，点击上方按钮生成" />
-                    )}
-                    {!summariesLoading && summaries.length > 0 && (
-                      <List
-                        itemLayout="vertical"
-                        dataSource={summaries}
-                        renderItem={(item: Summary) => (
-                          <List.Item>
-                            <List.Item.Meta
-                              title={item.topic || '(无主题)'}
-                              description={`时间: ${formatTime(item.start_time || 0, 'ms')} ~ ${formatTime(item.end_time || 0, 'ms')}`}
-                            />
-                            <div style={{ whiteSpace: 'pre-wrap' }}>
-                              <MarkdownRenderer>{item.summary || ''}</MarkdownRenderer>
+                <div style={{ padding: 12, display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1, overflow: 'auto' }}>
+                  <div style={{ padding: 12, background: '#fafafa', borderRadius: 4 }}>
+                    {(() => {
+                      // 优先使用 videoSummary（来自 Qdrant 视频的全文总结）
+                      if (videoSummary && videoSummary.trim()) {
+                        return (
+                          <div>
+                            <h3 style={{ marginBottom: 12, fontSize: 16, fontWeight: 600 }}>视频全文总结</h3>
+                            <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
+                              <MarkdownRenderer>{videoSummary}</MarkdownRenderer>
                             </div>
-                          </List.Item>
-                        )}
-                      />
-                    )}
+                          </div>
+                        )
+                      }
+
+                      // 如果没有全文总结，显示提示信息
+                      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无全文总结数据" />
+                    })()}
                   </div>
                 </div>
               </Tabs.TabPane>

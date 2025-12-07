@@ -23,6 +23,7 @@ from backend.db.pg_store import (
     save_summaries,
 )
 from backend.utils.vedio_utils.download_video.download_bilibili import download_bilibili
+from backend.utils.oss_client import get_oss_client, upload_video_to_oss, is_oss_url, delete_oss_file_by_url
 from backend.text_process.summarize import summarize_segments
 from config import get_config
 import os
@@ -60,6 +61,7 @@ def api_download(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
     playlist = bool(payload.get("playlist", False))
     quality = payload.get("quality", "best")
     workers = int(payload.get("workers", 16))
+    upload_to_oss = payload.get("upload_to_oss", True)  # 默认上传到 OSS
 
     files = download_bilibili(
         url=url,
@@ -73,13 +75,31 @@ def api_download(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
     )
 
     items: List[Dict[str, Any]] = []
+    oss_client = get_oss_client()
+
     for fp in files:
         p = Path(fp)
-        # 只暴露静态访问路径
+        local_path = str(p.resolve())
+        basename = p.name
+        static_url = f"/static/{basename}"
+        oss_url = None
+
+        # 尝试上传到 OSS
+        if upload_to_oss and oss_client.is_enabled():
+            oss_result = upload_video_to_oss(local_path)
+            if oss_result["success"]:
+                oss_url = oss_result["url"]
+                static_url = oss_url  # 使用 OSS URL 作为静态 URL
+                logging.info(f"Video uploaded to OSS: {oss_url}")
+            else:
+                logging.warning(f"Failed to upload to OSS: {oss_result['error']}")
+
         items.append({
-            "path": str(p.resolve()),
-            "basename": p.name,
-            "static_url": f"/static/{p.name}",
+            "path": local_path,
+            "basename": basename,
+            "static_url": static_url,
+            "oss_url": oss_url,
+            "local_path": local_path,
         })
 
     return {"items": items}
@@ -239,7 +259,7 @@ def api_list_jobs(request: Request, status: str | None = None, limit: int = 50, 
 @router.delete("/transcripts/{transcript_id}")
 def api_delete_transcript_complete(transcript_id: int, request: Request) -> Dict[str, Any]:
     """删除指定的转写记录及其对应的视频文件。
-    该操作会同时删除视频文件和数据库记录，不可恢复。
+    该操作会同时删除视频文件、向量数据和数据库记录，不可恢复。
     """
     logging.info(f"开始删除操作 - transcript_id: {transcript_id}")
     
@@ -261,45 +281,83 @@ def api_delete_transcript_complete(transcript_id: int, request: Request) -> Dict
     errors = []
     
     try:
-        # 第一步：删除视频文件
+        # 第一步：删除视频文件（本地或 OSS）
         media_path = transcript.get("media_path")
         if media_path:
-            try:
-                # 解析文件路径
-                file_path = Path(media_path)
-                
-                # 安全检查：确保文件在静态目录内，防止路径遍历攻击
+            # 检查是否为 OSS URL
+            if is_oss_url(media_path):
                 try:
-                    file_path.resolve().relative_to(static_dir.resolve())
-                except ValueError:
-                    # 如果文件不在静态目录内，尝试通过文件名在静态目录中查找
-                    basename = file_path.name
-                    file_path = static_dir / basename
-                
-                # 检查文件是否存在并删除
-                if file_path.exists() and file_path.is_file():
-                    file_path.unlink()  # 删除文件
-                    deleted_files.append(str(file_path))
-                    logging.info(f"已删除视频文件: {file_path}")
+                    logging.info(f"检测到 OSS URL，开始删除 OSS 文件: {media_path}")
+                    if delete_oss_file_by_url(media_path):
+                        deleted_files.append(f"OSS: {media_path}")
+                        logging.info(f"已删除 OSS 文件: {media_path}")
+                    else:
+                        logging.warning(f"OSS 文件删除失败或不存在: {media_path}")
+                except Exception as e:
+                    error_msg = f"删除 OSS 文件失败: {str(e)}"
+                    errors.append(error_msg)
+                    logging.error(error_msg)
+            else:
+                # 本地文件删除逻辑
+                try:
+                    file_path = Path(media_path)
+
+                    # 安全检查：确保文件在静态目录内，防止路径遍历攻击
+                    try:
+                        file_path.resolve().relative_to(static_dir.resolve())
+                    except ValueError:
+                        # 如果文件不在静态目录内，尝试通过文件名在静态目录中查找
+                        basename = file_path.name
+                        file_path = static_dir / basename
+
+                    # 检查文件是否存在并删除
+                    if file_path.exists() and file_path.is_file():
+                        file_path.unlink()  # 删除文件
+                        deleted_files.append(str(file_path))
+                        logging.info(f"已删除本地视频文件: {file_path}")
+                    else:
+                        logging.warning(f"本地视频文件不存在: {file_path}")
+
+                except Exception as e:
+                    error_msg = f"删除本地视频文件失败: {str(e)}"
+                    errors.append(error_msg)
+                    logging.error(error_msg)
+        
+        # 第二步：删除向量数据库记录
+        if media_path:
+            try:
+                from backend.knowledge.vector_store import get_vector_store
+                logging.info(f"开始删除向量数据: {media_path}")
+
+                vector_db_dir = getattr(request.app.state, "vector_db_dir", Path(request.app.state.static_dir).parent / "vector_db")
+                vector_store = get_vector_store(str(vector_db_dir))
+
+                # 删除 Qdrant 中的向量数据
+                if hasattr(vector_store, 'delete_video'):
+                    delete_success = vector_store.delete_video(media_path)
+                    if delete_success:
+                        logging.info(f"已删除向量数据: {media_path}")
+                    else:
+                        logging.warning(f"向量数据删除失败或不存在: {media_path}")
                 else:
-                    logging.warning(f"视频文件不存在: {file_path}")
-                    
+                    logging.warning(f"当前向量存储不支持删除操作")
+
             except Exception as e:
-                error_msg = f"删除视频文件失败: {str(e)}"
+                error_msg = f"删除向量数据失败: {str(e)}"
                 errors.append(error_msg)
                 logging.error(error_msg)
-        
-        # 第二步：删除转写记录
+
+        # 第三步：删除转写记录
         logging.info(f"开始删除数据库记录: {transcript_id}")
         success = delete_transcript(db_url, transcript_id)
         logging.info(f"数据库删除结果: {success}")
-        
+
         if not success:
             logging.error(f"数据库删除失败: {transcript_id}")
             raise HTTPException(status_code=404, detail="转写记录不存在或已被删除")
-        
+
         logging.info(f"已删除转写记录: {transcript_id}")
-        
+
         # 返回结果
         message_parts = []
         if deleted_files:
@@ -409,24 +467,11 @@ def api_import_from_pyvideotrans(payload: Dict[str, Any], request: Request) -> D
             save_summaries(db_url, transcript_id, summaries)
             logging.info(f"[pyvideotrans import] Created {len(summaries)} summaries")
 
-        # 3. 同步到向量库
-        try:
-            from backend.knowledge.knowledge_service import sync_transcript_to_vector_db
-            vector_db_dir = getattr(request.app.state, "vector_db_dir", Path(request.app.state.static_dir).parent / "vector_db")
-
-            sync_success = sync_transcript_to_vector_db(
-                db_url=db_url,
-                transcript_id=transcript_id,
-                persist_directory=str(vector_db_dir)
-            )
-
-            if sync_success:
-                logging.info(f"[pyvideotrans import] Synced to vector DB: transcript_id={transcript_id}")
-            else:
-                logging.warning(f"[pyvideotrans import] Failed to sync to vector DB: transcript_id={transcript_id}")
-
-        except Exception as e:
-            logging.warning(f"[pyvideotrans import] Vector DB sync error: {e}")
+        # 3. ⚠️ 注意: 不再同步到本地向量库
+        # pyvideotrans 已将数据直接写入 Qdrant
+        # HearSight 只需从 PostgreSQL 和 Qdrant 读取即可
+        logging.info(f"[pyvideotrans import] ✅ Data stored in PostgreSQL")
+        logging.info(f"[pyvideotrans import] ℹ️ Vector data should be in Qdrant (written by pyvideotrans)")
 
         return {
             "success": True,

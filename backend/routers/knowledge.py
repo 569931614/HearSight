@@ -272,16 +272,15 @@ def api_get_video_paragraphs(video_id: str, request: Request) -> Dict[str, Any]:
         - summary: 视频摘要
     """
     try:
-        # 获取向量库目录
-        vector_backend = os.environ.get('HEARSIGHT_VECTOR_BACKEND', 'chromadb')
+        # 获取向量库目录（已弃用 persist_directory，但保留以兼容旧代码）
+        vector_backend = os.environ.get('HEARSIGHT_VECTOR_BACKEND', 'qdrant')
 
         if vector_backend == 'volcengine':
-            # 火山引擎使用本地JSON存储
-            base_path = os.environ.get('HEARSIGHT_VECTOR_DB_DIR', 'app_datas/vector_db')
-            persist_directory = os.path.join(base_path, 'volcengine')
+            # 火山引擎已不再支持本地JSON存储
+            persist_directory = None
         else:
-            # ChromaDB 或 PostgreSQL
-            persist_directory = os.environ.get('HEARSIGHT_VECTOR_DB_DIR', 'app_datas/vector_db')
+            # Qdrant 或 PostgreSQL 不需要 persist_directory
+            persist_directory = None
 
         result = get_video_paragraphs_by_video_id(video_id, persist_directory)
 

@@ -346,7 +346,14 @@ def get_transcript_by_id(db_url: Optional[str], transcript_id: int) -> Optional[
 
 
 def get_transcript_id_by_path(db_url: Optional[str], media_path: str) -> Optional[int]:
-    """根据 media_path 查找对应的 transcript_id"""
+    """根据 media_path 查找对应的 transcript_id
+
+    优先精确匹配，如果失败则尝试文件名模糊匹配（支持 URL 路径）
+    """
+    import logging
+    from pathlib import Path
+
+    logger = logging.getLogger(__name__)
     conn_params = _ensure_conn_params(db_url)
     if "dsn" in conn_params:
         conn = psycopg2.connect(conn_params["dsn"])  # type: ignore[arg-type]
@@ -355,6 +362,7 @@ def get_transcript_id_by_path(db_url: Optional[str], media_path: str) -> Optiona
     try:
         with conn:
             with conn.cursor() as cur:
+                # 1. 精确匹配
                 cur.execute(
                     """
                     SELECT id FROM transcripts
@@ -365,7 +373,32 @@ def get_transcript_id_by_path(db_url: Optional[str], media_path: str) -> Optiona
                     (media_path,),
                 )
                 row = cur.fetchone()
-                return int(row[0]) if row else None
+                if row:
+                    logger.info(f"[lookup] 精确匹配成功: transcript_id={row[0]}")
+                    return int(row[0])
+
+                # 2. 提取文件名进行模糊匹配
+                # 支持 URL 和本地路径（例如：https://.../.../213706ce_9月22日.mp4 -> 213706ce_9月22日.mp4）
+                if '/' in media_path or '\\' in media_path:
+                    filename = Path(media_path).name
+                    logger.info(f"[lookup] 精确匹配失败，尝试文件名模糊匹配: {filename}")
+
+                    cur.execute(
+                        """
+                        SELECT id FROM transcripts
+                        WHERE media_path LIKE %s
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """,
+                        (f'%{filename}%',),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        logger.info(f"[lookup] 文件名模糊匹配成功: transcript_id={row[0]}")
+                        return int(row[0])
+
+                logger.warning(f"[lookup] 未找到匹配的转写记录: {media_path}")
+                return None
     finally:
         conn.close()
 

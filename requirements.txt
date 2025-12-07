@@ -13,3 +13,6 @@ PyYAML
 psycopg2-binary
 # Qdrant 向量数据库客户端
 qdrant-client>=1.7.0
+
+# Aliyun OSS SDK
+oss2>=2.18.0
