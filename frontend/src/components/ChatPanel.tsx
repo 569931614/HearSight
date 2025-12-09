@@ -17,6 +17,7 @@ interface VideoReference {
   videoPath?: string
   staticUrl?: string
   transcriptId?: number
+  videoId?: string
   startTime: number
   endTime?: number
 }
