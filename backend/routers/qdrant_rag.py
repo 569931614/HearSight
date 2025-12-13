@@ -474,6 +474,8 @@ async def qdrant_list_videos(
         if page_size > 100:
             page_size = 100
 
+        logger.info(f"[qdrant] qdrant_list_videos called: page={page}, page_size={page_size}, force_refresh={force_refresh}, folder_id={folder_id}")
+
         # Check cache first (unless force_refresh is True)
         now = datetime.now()
         cache_key = f"all_videos_{folder_id}" if folder_id else "all_videos"
@@ -520,6 +522,11 @@ async def qdrant_list_videos(
         # Filter by folder if specified
         if folder_id:
             all_videos = [v for v in all_videos if v.get("folder_id") == folder_id]
+
+        # ⚠️ 注意：视频列表不生成签名 URL
+        # 签名 URL 会在用户点击视频时，通过 /api/qdrant/videos/{video_id}/paragraphs 接口按需生成
+        # 这样可以避免签名过期问题（1小时有效期）
+        logger.info(f"[qdrant] 视频列表不生成签名 URL，将在播放时按需生成")
 
         # Update cache
         if cache_key not in _video_list_cache:

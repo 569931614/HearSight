@@ -18,15 +18,30 @@ class OSSClient:
 
     def __init__(self):
         """初始化 OSS 客户端"""
-        self.enabled = os.getenv("OSS_ENABLED", "false").lower() == "true"
-        self.provider = os.getenv("OSS_PROVIDER", "aliyun")
-        self.access_key_id = os.getenv("OSS_ACCESS_KEY_ID", "")
-        self.access_key_secret = os.getenv("OSS_ACCESS_KEY_SECRET", "")
-        self.region = os.getenv("OSS_REGION", "oss-cn-shanghai")
-        self.bucket_name = os.getenv("OSS_BUCKET", "")
-        self.endpoint = os.getenv("OSS_ENDPOINT", "https://oss-cn-shanghai.aliyuncs.com")
-        self.path_prefix = os.getenv("OSS_PATH_PREFIX", "videos/")
-        self.public_access = os.getenv("OSS_PUBLIC_ACCESS", "true").lower() == "true"
+        # 直接从 .env 文件读取配置，避免环境变量冲突
+        from pathlib import Path
+        from config import _parse_env, ENV_FILE
+
+        env_data = _parse_env(ENV_FILE)
+
+        # 去除值中的注释（# 后面的内容）并trim空白
+        def clean_value(value):
+            if value and isinstance(value, str):
+                # 移除注释
+                if '#' in value:
+                    value = value.split('#')[0]
+                return value.strip()
+            return value
+
+        self.enabled = clean_value(env_data.get("OSS_ENABLED", os.getenv("OSS_ENABLED", "false"))).lower() == "true"
+        self.provider = clean_value(env_data.get("OSS_PROVIDER", os.getenv("OSS_PROVIDER", "aliyun")))
+        self.access_key_id = clean_value(env_data.get("OSS_ACCESS_KEY_ID", os.getenv("OSS_ACCESS_KEY_ID", "")))
+        self.access_key_secret = clean_value(env_data.get("OSS_ACCESS_KEY_SECRET", os.getenv("OSS_ACCESS_KEY_SECRET", "")))
+        self.region = clean_value(env_data.get("OSS_REGION", os.getenv("OSS_REGION", "oss-cn-shanghai")))
+        self.bucket_name = clean_value(env_data.get("OSS_BUCKET", os.getenv("OSS_BUCKET", "")))
+        self.endpoint = clean_value(env_data.get("OSS_ENDPOINT", os.getenv("OSS_ENDPOINT", "https://oss-cn-shanghai.aliyuncs.com")))
+        self.path_prefix = clean_value(env_data.get("OSS_PATH_PREFIX", os.getenv("OSS_PATH_PREFIX", "videos/")))
+        self.public_access = clean_value(env_data.get("OSS_PUBLIC_ACCESS", os.getenv("OSS_PUBLIC_ACCESS", "true"))).lower() == "true"
 
         self.bucket = None
         if self.enabled:
@@ -49,7 +64,7 @@ class OSSClient:
 
             auth = oss2.Auth(self.access_key_id, self.access_key_secret)
             self.bucket = oss2.Bucket(auth, self.endpoint, self.bucket_name)
-            logger.info(f"OSS client initialized: bucket={self.bucket_name}, region={self.region}")
+            logger.info(f"OSS client initialized: bucket={self.bucket_name}, region={self.region}, public_access={self.public_access}")
         except ImportError:
             logger.error("oss2 library not installed. Run: pip install oss2")
             self.enabled = False
@@ -178,6 +193,50 @@ class OSSClient:
             endpoint = endpoint[7:]
 
         return f"https://{self.bucket_name}.{endpoint}/{object_key}"
+
+    def generate_signed_url(self, object_key: str, expires: int = 3600) -> str:
+        """
+        生成带签名的临时访问 URL（用于私有 Bucket）
+
+        Args:
+            object_key: 对象键
+            expires: 过期时间（秒），默认 3600 秒 (1 小时)
+
+        Returns:
+            签名 URL
+        """
+        if not self.is_enabled():
+            logger.warning("OSS client not enabled, cannot generate signed URL")
+            return ""
+
+        try:
+            # 生成签名 URL
+            signed_url = self.bucket.sign_url('GET', object_key, expires)
+            logger.debug(f"Generated signed URL for {object_key}, expires in {expires}s")
+            return signed_url
+        except Exception as e:
+            logger.error(f"Failed to generate signed URL: {e}")
+            return ""
+
+    def get_url(self, object_key: str, signed: bool = None, expires: int = 3600) -> str:
+        """
+        获取访问 URL（自动判断是否需要签名）
+
+        Args:
+            object_key: 对象键
+            signed: 是否使用签名 URL。None 表示根据 public_access 自动判断
+            expires: 签名 URL 过期时间（秒）
+
+        Returns:
+            访问 URL
+        """
+        if signed is None:
+            signed = not self.public_access
+
+        if signed:
+            return self.generate_signed_url(object_key, expires)
+        else:
+            return self.get_public_url(object_key)
 
     def delete_file(self, object_key: str) -> bool:
         """
@@ -312,3 +371,79 @@ def delete_oss_file_by_url(oss_url: str) -> bool:
         return False
 
     return client.delete_file(object_key)
+
+
+def generate_signed_url(oss_url_or_key: str, expires: int = 3600) -> str:
+    """
+    生成 OSS 签名 URL
+
+    Args:
+        oss_url_or_key: OSS URL 或对象键
+        expires: 过期时间（秒），默认 3600 秒 (1 小时)
+
+    Returns:
+        签名 URL，失败返回原 URL
+    """
+    client = get_oss_client()
+    if not client.is_enabled():
+        return oss_url_or_key
+
+    # 尝试从 URL 提取对象键
+    object_key = extract_oss_key_from_url(oss_url_or_key)
+    if not object_key:
+        # 如果不是 URL，就当作对象键处理
+        object_key = oss_url_or_key
+
+    signed_url = client.generate_signed_url(object_key, expires)
+    return signed_url if signed_url else oss_url_or_key
+
+
+def convert_to_signed_url(url: str, expires: int = 3600, force: bool = False) -> str:
+    """
+    将 URL 转换为签名 URL（如果是 OSS URL）
+
+    Args:
+        url: 原始 URL
+        expires: 过期时间（秒）
+        force: 是否强制生成签名 URL（忽略 OSS_PUBLIC_ACCESS 配置）
+
+    Returns:
+        签名 URL 或原始 URL
+    """
+    if not url:
+        return url
+
+    # 如果 URL 缺少协议前缀，添加 https://
+    normalized_url = url
+    if not url.startswith(('http://', 'https://')):
+        # 检查是否是 OSS 域名格式
+        if is_oss_url(url):
+            normalized_url = f"https://{url}"
+            logger.debug(f"添加协议前缀: {url} -> {normalized_url}")
+
+    # 检查是否为 OSS URL
+    if not is_oss_url(normalized_url):
+        logger.debug(f"不是 OSS URL，直接返回: {url[:100]}")
+        return url
+
+    client = get_oss_client()
+
+    if not client.is_enabled():
+        logger.debug("OSS client not enabled, returning original URL")
+        return normalized_url  # 返回规范化后的 URL
+
+    # 如果 force=True 或 bucket 不是公开访问，生成签名 URL
+    if force or not client.public_access:
+        object_key = extract_oss_key_from_url(normalized_url)
+
+        if object_key:
+            signed_url = client.generate_signed_url(object_key, expires)
+
+            if signed_url:
+                logger.debug(f"生成签名 URL: {object_key} -> {signed_url[:100]}...")
+                return signed_url
+            else:
+                logger.warning(f"Failed to generate signed URL for {object_key}")
+
+    return normalized_url
+

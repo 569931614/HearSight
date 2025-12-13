@@ -39,6 +39,14 @@ def _build_static_url(static_dir: Path, media_path: Optional[str]) -> Optional[s
     if media_path.startswith(('http://', 'https://')):
         return media_path
 
+    # 检查是否为 OSS URL（可能缺少协议前缀）
+    if is_oss_url(media_path):
+        # 如果已经有协议前缀，直接返回
+        if media_path.startswith(('http://', 'https://')):
+            return media_path
+        # 否则添加 https:// 前缀
+        return f"https://{media_path}"
+
     # 本地文件：转换为 /static/ 路径
     try:
         media = Path(media_path).resolve()
@@ -247,7 +255,7 @@ def api_get_job(job_id: int, request: Request) -> Dict[str, Any]:
 
 
 @router.get("/jobs")
-def api_list_jobs(request: Request, status: str | None = None, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+def api_list_jobs(request: Request, status: Optional[str] = None, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
     """列出任务队列，支持按状态筛选（pending/running/success/failed）。
     返回: { items: [{id, url, status, created_at, started_at, finished_at, result, error}] }
     """

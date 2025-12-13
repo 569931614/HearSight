@@ -1,4 +1,5 @@
 import os
+from typing import Optional, List
 from yt_dlp import YoutubeDL
 
 
@@ -9,9 +10,9 @@ def download_bilibili(
     playlist: bool = False,
     quality: str = "best",
     workers: int = 16,
-    use_nopart: bool | None = None,
+    use_nopart: Optional[bool] = None,
     simple_filename: bool = True,
-) -> list[str]:
+) -> List[str]:
     """
     bilibili 下载函数（基于 yt-dlp）。
 
@@ -67,7 +68,7 @@ def download_bilibili(
         else:
             yield info
 
-    results: list[str] = []
+    results: List[str] = []
     with YoutubeDL(ydl_opts) as ydl:
         # 执行下载；yt-dlp 会在 info 中填充后处理结果
         info = ydl.extract_info(url, download=True)

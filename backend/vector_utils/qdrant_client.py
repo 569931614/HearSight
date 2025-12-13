@@ -322,9 +322,30 @@ class VideoQdrantClient:
             logger.info(f"成功从 Qdrant 重建视频段落: video_id={video_id}, segments={len(segments)}, summaries={len(summaries)}")
             logger.info(f"video_summary 前200字符: {video_summary_text[:200]}...")
 
+            # ✅ 按需生成签名 URL（仅在播放时）
+            # 这样可以确保每次播放都有有效的签名 URL，避免过期问题
+            static_url = None
+            if video_path:
+                # 规范化 URL（添加协议前缀）
+                if not video_path.startswith(('http://', 'https://')):
+                    from backend.utils.oss_client import is_oss_url
+                    if is_oss_url(video_path):
+                        video_path_normalized = f"https://{video_path}"
+                    else:
+                        video_path_normalized = video_path
+                else:
+                    video_path_normalized = video_path
+
+                # 生成签名 URL
+                from backend.utils.oss_client import convert_to_signed_url
+                static_url = convert_to_signed_url(video_path_normalized, expires=3600)  # 1小时有效期
+                logger.info(f"✅ 按需生成签名 URL (有效期 1 小时)")
+                logger.info(f"   原始路径: {video_path[:80]}...")
+                logger.info(f"   签名 URL: {static_url[:100]}...")
+
             result = {
                 "media_path": video_path,
-                "static_url": video_path if video_path and video_path.startswith("http") else None,
+                "static_url": static_url,
                 "segments": segments,
                 "video_summary": video_summary_text,  # 真正的全文总结（优先从 metadata 获取）
                 "summary": {
@@ -371,9 +392,13 @@ class VideoQdrantClient:
                 # 如果为 0 或不存在，显示为 "未知"
                 total_segments = payload.get("total_segments", 0)
 
+                # 获取视频路径（不生成签名 URL）
+                # 签名 URL 会在播放视频时通过 get_video_paragraphs_by_video_id() 按需生成
+                video_path = payload.get("video_path")
+
                 videos.append({
                     "video_id": video_id,
-                    "video_path": payload.get("video_path"),
+                    "video_path": video_path,
                     "video_title": payload.get("video_title"),
                     "topic": payload.get("video_title"),  # alias for compatibility
                     "video_summary": payload.get("video_summary"),

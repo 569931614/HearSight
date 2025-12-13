@@ -10,6 +10,7 @@ import VideoPlayer from './components/VideoPlayer'
 import RightPanel from './components/RightPanel'
 import ChatPanel from './components/ChatPanel'
 import AdminSettings from './components/AdminSettings'
+import VideoGalleryPage from './components/VideoGalleryPage'
 
 const { Header, Footer } = Layout
 const { Title } = Typography
@@ -45,6 +46,9 @@ function App() {
   const [rightPanelVisible, setRightPanelVisible] = useState(false)
   const [chatPanelVisible, setChatPanelVisible] = useState(true) // 默认显示AI对话
   const [videoModalVisible, setVideoModalVisible] = useState(false) // 视频播放器弹窗
+
+  // 页面切换状态
+  const [currentView, setCurrentView] = useState<'gallery' | 'chat'>('gallery') // 默认显示视频展示页
 
   // 会话管理状态
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
@@ -311,161 +315,190 @@ function App() {
           <Title level={3} style={{ margin: 0, color: 'white' }}>{siteTitle}</Title>
         </div>
         <div className="header-right">
-          <Button
-            type="text"
-            icon={<SettingOutlined />}
-            onClick={() => setAdminSettingsVisible(true)}
-            style={{ color: 'white' }}
-          >
-            管理员设置
-          </Button>
+          <Space>
+            {currentView === 'chat' && (
+              <Button
+                type="primary"
+                icon={<LeftOutlined />}
+                onClick={() => setCurrentView('gallery')}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  color: 'white'
+                }}
+              >
+                返回主页
+              </Button>
+            )}
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              onClick={() => setAdminSettingsVisible(true)}
+              style={{ color: 'white' }}
+            >
+              管理员设置
+            </Button>
+          </Space>
         </div>
       </Header>
       
       {/* 主内容区域 */}
       <div className="fullscreen-content">
-        {/* 左侧面板 */}
-        {leftPanelVisible && (
-          <div className="fullscreen-left-panel">
-            <div className="panel-header">
-              <span>对话与视频</span>
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                onClick={() => setLeftPanelVisible(false)}
-                size="small"
-              />
+        {currentView === 'gallery' ? (
+          /* 视频展示页面 */
+          <VideoGalleryPage
+            onVideoClick={(videoId) => {
+              loadTranscriptDetail(videoId)
+            }}
+            onSwitchToChat={() => setCurrentView('chat')}
+          />
+        ) : (
+          /* 对话分析页面（原来的布局） */
+          <>
+            {/* 左侧面板 */}
+            {leftPanelVisible && (
+              <div className="fullscreen-left-panel">
+                <div className="panel-header">
+                  <span>对话与视频</span>
+                  <Button
+                    type="text"
+                    icon={<CloseOutlined />}
+                    onClick={() => setLeftPanelVisible(false)}
+                    size="small"
+                  />
+                </div>
+                <div className="panel-content">
+                  <LeftPanel
+                    summaries={summaries}
+                    onLoadTranscript={loadTranscriptDetail}
+                    onSummariesUpdate={loadSummaries}
+                    chatSessions={chatSessions}
+                    onSelectSession={handleSelectSession}
+                    onNewSession={handleNewSession}
+                    onDeleteSession={handleDeleteSession}
+                    currentSessionId={currentSessionId}
+                    currentPage={currentPage}
+                    pageSize={pageSize}
+                    totalVideos={totalVideos}
+                    onPageChange={handlePageChange}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 主内容区域 - AI 对话或欢迎页面 */}
+            <div className={`fullscreen-main ${leftPanelVisible ? 'with-left' : ''}`}>
+              {chatPanelVisible ? (
+                <ChatPanel
+                  currentSessionId={currentSessionId}
+                  onSessionChange={handleSessionChange}
+                  onVideoSeek={async ({ videoPath, staticUrl, transcriptId, videoId, startTime }) => {
+                    const startSeconds = Number(startTime ?? 0)
+                    try {
+                      let effectiveStatic = staticUrl || null
+                      let effectiveTranscriptId = transcriptId
+                      let loadedByVideoId = false
+
+                      // 如果没有 transcript_id，尝试通过 video_path 查找
+                      if (!effectiveTranscriptId && videoPath) {
+                        try {
+                          effectiveTranscriptId = await fetchTranscriptIdByPath(videoPath)
+                        } catch (error: any) {
+                          console.warn('Failed to fetch transcript_id by path:', error)
+                          // 继续执行，尝试使用 videoId
+                        }
+                      }
+
+                      // 如果仍然没有 transcript_id，但有 videoId，尝试通过 videoId 加载
+                      if (!effectiveTranscriptId && videoId) {
+                        try {
+                          const data = await fetchVideoByVideoId(videoId)
+                          // 直接设置 segments 和相关状态
+                          setSegments(data.segments || [])
+                          setActiveTranscriptId(undefined) // 没有 transcript_id
+                          setVideoSummary((data as any).video_summary || null)
+                          effectiveStatic = data.static_url || effectiveStatic
+                          loadedByVideoId = true
+                        } catch (error: any) {
+                          console.warn('Failed to fetch video by videoId:', error)
+                          // 继续执行，只播放视频
+                        }
+                      }
+
+                      if (effectiveTranscriptId) {
+                        // 有 transcript_id，加载完整的转写记录（包含所有分句和摘要）
+                        if (effectiveTranscriptId !== activeTranscriptId) {
+                          const data = await loadTranscriptDetail(effectiveTranscriptId)
+                          effectiveStatic = data?.static_url || effectiveStatic
+                        } else {
+                          // 已经加载了该视频，只需要更新视频源（如果需要）
+                          if (staticUrl && staticUrl !== videoSrc) {
+                            setVideoSrc(staticUrl)
+                          }
+                          // 确保右侧面板是打开的
+                          setVideoModalVisible(true)
+                          setRightPanelVisible(true)
+                        }
+
+                        // 打开视频弹窗和右侧面板，跳转到指定时间
+                        setVideoModalVisible(true)
+                        setRightPanelVisible(true)
+                        setTimeout(() => {
+                          handleSeekTo(startSeconds * 1000)
+                        }, 500)
+                      } else if (loadedByVideoId) {
+                        // 通过 videoId 加载成功，打开视频面板
+                        setVideoModalVisible(true)
+                        setRightPanelVisible(true)
+                        if (effectiveStatic && effectiveStatic !== videoSrc) {
+                          setVideoSrc(effectiveStatic)
+                        }
+                        setTimeout(() => {
+                          handleSeekTo(startSeconds * 1000)
+                        }, 500)
+                      } else {
+                        // 没有 transcript_id 也没有通过 videoId 加载，只播放视频（不显示分句和摘要）
+                        if (!effectiveStatic && videoPath) {
+                          const basename = extractFilename(videoPath)
+                          if (basename) {
+                            effectiveStatic = `/static/${basename}`
+                          }
+                        }
+                        if (effectiveStatic && effectiveStatic !== videoSrc) {
+                          setVideoSrc(effectiveStatic)
+                        }
+
+                        // 打开视频弹窗（不显示右侧面板，因为没有分句数据）
+                        setVideoModalVisible(true)
+                        setRightPanelVisible(false)  // 关闭右侧面板
+                        message.info('该视频暂无字幕数据')
+                        setTimeout(() => {
+                          handleSeekTo(startSeconds * 1000)
+                        }, 500)
+                      }
+                    } catch (error: any) {
+                      console.error('onVideoSeek error:', error)
+                      message.error(error?.message || 'Unable to open the referenced video')
+                    }
+                  }}
+                />
+              ) : (
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  height: '100%',
+                  flexDirection: 'column',
+                  gap: '20px',
+                  color: '#999'
+                }}>
+                  <h2>欢迎使用 HearSight</h2>
+                  <p>从左侧选择视频或点击"AI 对话"开始</p>
+                </div>
+              )}
             </div>
-            <div className="panel-content">
-              <LeftPanel
-                summaries={summaries}
-                onLoadTranscript={loadTranscriptDetail}
-                onSummariesUpdate={loadSummaries}
-                chatSessions={chatSessions}
-                onSelectSession={handleSelectSession}
-                onNewSession={handleNewSession}
-                onDeleteSession={handleDeleteSession}
-                currentSessionId={currentSessionId}
-                currentPage={currentPage}
-                pageSize={pageSize}
-                totalVideos={totalVideos}
-                onPageChange={handlePageChange}
-              />
-            </div>
-          </div>
+          </>
         )}
-        
-        {/* 主内容区域 - AI 对话或欢迎页面 */}
-        <div className={`fullscreen-main ${leftPanelVisible ? 'with-left' : ''}`}>
-          {chatPanelVisible ? (
-            <ChatPanel
-              currentSessionId={currentSessionId}
-              onSessionChange={handleSessionChange}
-              onVideoSeek={async ({ videoPath, staticUrl, transcriptId, videoId, startTime }) => {
-                const startSeconds = Number(startTime ?? 0)
-                try {
-                  let effectiveStatic = staticUrl || null
-                  let effectiveTranscriptId = transcriptId
-                  let loadedByVideoId = false
-
-                  // 如果没有 transcript_id，尝试通过 video_path 查找
-                  if (!effectiveTranscriptId && videoPath) {
-                    try {
-                      effectiveTranscriptId = await fetchTranscriptIdByPath(videoPath)
-                    } catch (error: any) {
-                      console.warn('Failed to fetch transcript_id by path:', error)
-                      // 继续执行，尝试使用 videoId
-                    }
-                  }
-
-                  // 如果仍然没有 transcript_id，但有 videoId，尝试通过 videoId 加载
-                  if (!effectiveTranscriptId && videoId) {
-                    try {
-                      const data = await fetchVideoByVideoId(videoId)
-                      // 直接设置 segments 和相关状态
-                      setSegments(data.segments || [])
-                      setActiveTranscriptId(undefined) // 没有 transcript_id
-                      setVideoSummary((data as any).video_summary || null)
-                      effectiveStatic = data.static_url || effectiveStatic
-                      loadedByVideoId = true
-                    } catch (error: any) {
-                      console.warn('Failed to fetch video by videoId:', error)
-                      // 继续执行，只播放视频
-                    }
-                  }
-
-                  if (effectiveTranscriptId) {
-                    // 有 transcript_id，加载完整的转写记录（包含所有分句和摘要）
-                    if (effectiveTranscriptId !== activeTranscriptId) {
-                      const data = await loadTranscriptDetail(effectiveTranscriptId)
-                      effectiveStatic = data?.static_url || effectiveStatic
-                    } else {
-                      // 已经加载了该视频，只需要更新视频源（如果需要）
-                      if (staticUrl && staticUrl !== videoSrc) {
-                        setVideoSrc(staticUrl)
-                      }
-                      // 确保右侧面板是打开的
-                      setVideoModalVisible(true)
-                      setRightPanelVisible(true)
-                    }
-
-                    // 打开视频弹窗和右侧面板，跳转到指定时间
-                    setVideoModalVisible(true)
-                    setRightPanelVisible(true)
-                    setTimeout(() => {
-                      handleSeekTo(startSeconds * 1000)
-                    }, 500)
-                  } else if (loadedByVideoId) {
-                    // 通过 videoId 加载成功，打开视频面板
-                    setVideoModalVisible(true)
-                    setRightPanelVisible(true)
-                    if (effectiveStatic && effectiveStatic !== videoSrc) {
-                      setVideoSrc(effectiveStatic)
-                    }
-                    setTimeout(() => {
-                      handleSeekTo(startSeconds * 1000)
-                    }, 500)
-                  } else {
-                    // 没有 transcript_id 也没有通过 videoId 加载，只播放视频（不显示分句和摘要）
-                    if (!effectiveStatic && videoPath) {
-                      const basename = extractFilename(videoPath)
-                      if (basename) {
-                        effectiveStatic = `/static/${basename}`
-                      }
-                    }
-                    if (effectiveStatic && effectiveStatic !== videoSrc) {
-                      setVideoSrc(effectiveStatic)
-                    }
-
-                    // 打开视频弹窗（不显示右侧面板，因为没有分句数据）
-                    setVideoModalVisible(true)
-                    setRightPanelVisible(false)  // 关闭右侧面板
-                    message.info('该视频暂无字幕数据')
-                    setTimeout(() => {
-                      handleSeekTo(startSeconds * 1000)
-                    }, 500)
-                  }
-                } catch (error: any) {
-                  console.error('onVideoSeek error:', error)
-                  message.error(error?.message || 'Unable to open the referenced video')
-                }
-              }}
-            />
-          ) : (
-            <div style={{
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              height: '100%',
-              flexDirection: 'column',
-              gap: '20px',
-              color: '#999'
-            }}>
-              <h2>欢迎使用 HearSight</h2>
-              <p>从左侧选择视频或点击"AI 对话"开始</p>
-            </div>
-          )}
-        </div>
       </div>
       
       {/* 底部状态栏 */}

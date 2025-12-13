@@ -47,49 +47,52 @@ const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(({ videoSrc, 
   }
 
   return (
-    <>
-      <Card
-        title="视频播放器"
-        extra={videoSrc && <Tag color="green">可播放</Tag>}
-        className="fullscreen-video-card"
-      >
-        {videoSrc ? (
-          <div className="video-container">
-            <video
-              ref={ref}
-              src={videoSrc}
-              controls
-              className="fullscreen-video"
-              preload="metadata"
-            />
-          </div>
-        ) : (
-          <div className="video-placeholder">
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无视频" />
-          </div>
-        )}
-        {loading && (
-          <div className="loading-overlay">
-            处理中，请稍候…（首次识别会较慢）
-          </div>
-        )}
-      </Card>
-      {videoSrc && (
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-          <span style={{ fontSize: 14, color: '#666' }}>播放速度:</span>
-          <Select
-            size="small"
-            value={playbackSpeed}
-            onChange={handleSpeedChange}
-            style={{ width: 80 }}
-            options={PLAYBACK_SPEEDS.map(speed => ({
-              value: speed,
-              label: `${speed}x`
-            }))}
+    <Card
+      title="视频播放器"
+      extra={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {videoSrc && (
+            <>
+              <span style={{ fontSize: 14, color: '#666' }}>播放速度:</span>
+              <Select
+                size="small"
+                value={playbackSpeed}
+                onChange={handleSpeedChange}
+                style={{ width: 80 }}
+                options={PLAYBACK_SPEEDS.map(speed => ({
+                  value: speed,
+                  label: `${speed}x`
+                }))}
+              />
+            </>
+          )}
+          {videoSrc && <Tag color="green">可播放</Tag>}
+        </div>
+      }
+      className="fullscreen-video-card"
+    >
+      {videoSrc ? (
+        <div className="video-container">
+          <video
+            ref={ref}
+            src={videoSrc}
+            controls
+            autoPlay
+            className="fullscreen-video"
+            preload="metadata"
           />
         </div>
+      ) : (
+        <div className="video-placeholder">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无视频" />
+        </div>
       )}
-    </>
+      {loading && (
+        <div className="loading-overlay">
+          处理中，请稍候…（首次识别会较慢）
+        </div>
+      )}
+    </Card>
   )
 })
 
