@@ -396,6 +396,32 @@ class VideoQdrantClient:
                 # 签名 URL 会在播放视频时通过 get_video_paragraphs_by_video_id() 按需生成
                 video_path = payload.get("video_path")
 
+                # 获取缩略图路径并生成签名 URL
+                # ⚠️ 只读取 Qdrant 中实际存在的 thumbnail_url 字段，不自动推测
+                thumbnail_path = payload.get("thumbnail_url") or payload.get("thumbnail_path")
+                thumbnail_url = None
+
+                if thumbnail_path:
+                    # 规范化 URL（添加协议前缀）
+                    if not thumbnail_path.startswith(('http://', 'https://')):
+                        from backend.utils.oss_client import is_oss_url
+                        if is_oss_url(thumbnail_path):
+                            thumbnail_path_normalized = f"https://{thumbnail_path}"
+                        else:
+                            thumbnail_path_normalized = thumbnail_path
+                    else:
+                        thumbnail_path_normalized = thumbnail_path
+
+                    # 生成签名 URL（缩略图有效期可以设置更长，比如24小时）
+                    try:
+                        from backend.utils.oss_client import convert_to_signed_url
+                        thumbnail_url = convert_to_signed_url(thumbnail_path_normalized, expires=86400)  # 24小时有效期
+                        logger.debug(f"[thumbnail] Generated signed URL for video {video_id[:8]}")
+                    except Exception as e:
+                        logger.warning(f"[thumbnail] Failed to generate signed URL for {thumbnail_path}: {e}")
+                        # 生成签名失败，不返回缩略图（文件可能不存在）
+                        thumbnail_url = None
+
                 videos.append({
                     "video_id": video_id,
                     "video_path": video_path,
@@ -407,10 +433,11 @@ class VideoQdrantClient:
                     "language": payload.get("language", ""),
                     "source_type": payload.get("source_type", ""),
                     "folder": payload.get("folder", "未分类"),
-                    "folder_id": payload.get("folder_id")
+                    "folder_id": payload.get("folder_id"),
+                    "thumbnail_url": thumbnail_url  # 添加缩略图签名 URL
                 })
 
-            logger.info(f"Listed {len(videos)} videos from Qdrant (metadata only)")
+            logger.info(f"Listed {len(videos)} videos from Qdrant, {sum(1 for v in videos if v.get('thumbnail_url'))} with thumbnails")
             return videos
 
         except Exception as e:
@@ -441,14 +468,60 @@ class VideoQdrantClient:
     # ==================== 文件夹管理方法（代理到 pyvideotrans）====================
 
     def list_folders(self) -> List[Dict[str, Any]]:
-        """列出所有文件夹"""
-        if not self._adapter:
-            logger.warning("Folder support not available")
-            return []
+        """列出所有文件夹（直接从 Qdrant folder_registry 读取）"""
         try:
-            return self._adapter.list_folders()
+            # 尝试使用 pyvideotrans 适配器（如果可用）
+            if self._adapter:
+                logger.info("Using pyvideotrans adapter for list_folders")
+                try:
+                    return self._adapter.list_folders()
+                except Exception as adapter_error:
+                    logger.warning(f"pyvideotrans adapter failed, using fallback: {adapter_error}")
+                    # 继续使用回退方案
+
+            # 回退方案：直接从 Qdrant 读取 folder_registry
+            import json
+            FOLDER_REGISTRY_ID = "00000000-0000-0000-0000-000000000001"
+
+            logger.info(f"Retrieving folder registry from Qdrant collection: {self.collection_metadata}")
+
+            # 添加超时保护
+            import signal
+
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Qdrant request timeout")
+
+            # 设置 5 秒超时
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(5)
+
+            try:
+                result = self.client.retrieve(
+                    collection_name=self.collection_metadata,
+                    ids=[FOLDER_REGISTRY_ID],
+                    with_payload=True,
+                    with_vectors=False
+                )
+            finally:
+                signal.alarm(0)  # 取消超时
+
+            if not result or len(result) == 0:
+                logger.warning("Folder registry not found in Qdrant, returning empty list")
+                return []
+
+            payload = result[0].payload
+            if payload.get("type") != "folder_registry":
+                logger.warning("Invalid folder registry format, returning empty list")
+                return []
+
+            registry_data = json.loads(payload.get("registry_data", "{}"))
+            folders = registry_data.get("folders", [])
+
+            logger.info(f"Retrieved {len(folders)} folders from Qdrant registry")
+            return folders
+
         except Exception as e:
-            logger.error(f"Failed to list folders: {e}")
+            logger.error(f"Failed to list folders: {e}", exc_info=True)
             return []
 
     def create_folder(self, folder_name: str) -> Optional[str]:
@@ -551,3 +624,108 @@ class VideoQdrantClient:
         except Exception as e:
             logger.error(f"Failed to search in folder: {e}")
             return []
+
+    def get_video_mindmap_by_video_id(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """
+        通过 video_id 获取视频的思维导图数据
+
+        Args:
+            video_id: 视频ID（MD5哈希值）
+
+        Returns:
+            Dict: 包含 video_id, mind_map_markdown, generated_at, version
+            None: 如果未找到思维导图数据
+        """
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+            # 从 metadata collection 获取思维导图数据
+            metadata_results, _ = self.client.scroll(
+                collection_name=self.collection_metadata,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="video_id", match=MatchValue(value=video_id))]
+                ),
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            if not metadata_results:
+                logger.warning(f"未找到 video_id={video_id} 的元数据")
+                return None
+
+            metadata_payload = metadata_results[0].payload
+            mind_map_markdown = metadata_payload.get("mind_map_markdown")
+
+            # 如果没有思维导图数据，返回 None
+            if not mind_map_markdown:
+                logger.info(f"video_id={video_id} 暂无思维导图数据")
+                return None
+
+            return {
+                "video_id": video_id,
+                "mind_map_markdown": mind_map_markdown,
+                "generated_at": metadata_payload.get("mind_map_generated_at", ""),
+                "version": metadata_payload.get("mind_map_version", "1.0")
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to get video mind map: {e}")
+            return None
+
+    def update_video_mindmap(
+        self,
+        video_id: str,
+        mind_map_markdown: str,
+        version: str = "1.0"
+    ) -> bool:
+        """
+        更新视频的思维导图数据
+
+        Args:
+            video_id: 视频ID（MD5哈希值）
+            mind_map_markdown: 思维导图 Markdown 内容
+            version: 思维导图版本（默认 "1.0"）
+
+        Returns:
+            bool: 更新是否成功
+        """
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            from datetime import datetime
+
+            # 查找视频元数据点
+            metadata_results, _ = self.client.scroll(
+                collection_name=self.collection_metadata,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="video_id", match=MatchValue(value=video_id))]
+                ),
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            if not metadata_results:
+                logger.warning(f"未找到 video_id={video_id} 的元数据，无法更新思维导图")
+                return False
+
+            # 获取点的 ID
+            point_id = metadata_results[0].id
+
+            # 更新 payload（添加或更新思维导图字段）
+            self.client.set_payload(
+                collection_name=self.collection_metadata,
+                payload={
+                    "mind_map_markdown": mind_map_markdown,
+                    "mind_map_generated_at": datetime.now().isoformat(),
+                    "mind_map_version": version
+                },
+                points=[point_id]
+            )
+
+            logger.info(f"成功更新 video_id={video_id} 的思维导图数据")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update video mind map: {e}")
+            return False

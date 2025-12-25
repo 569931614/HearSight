@@ -47,19 +47,9 @@ const VideoCard: React.FC<VideoCardProps> = ({ video, onClick }) => {
   }
 
   // 获取缩略图URL
-  const getThumbnailUrl = (): string | null => {
-    if (video.thumbnail_url) return video.thumbnail_url
-    if (video.video_path) {
-      // 尝试使用视频路径构造缩略图URL（假设后端提供了视频文件访问）
-      const filename = video.video_path.split('/').pop()
-      if (filename) {
-        return `/static/${filename}#t=0.1` // 使用视频第一帧作为缩略图
-      }
-    }
-    return null
-  }
-
-  const thumbnailUrl = getThumbnailUrl()
+  // 注意：视频列表不生成签名 URL，因为签名会过期（1小时有效期）
+  // 只有当 backend 返回 thumbnail_url 时才显示缩略图，否则显示占位图标
+  const thumbnailUrl = video.thumbnail_url || null
 
   return (
     <Card
@@ -74,11 +64,13 @@ const VideoCard: React.FC<VideoCardProps> = ({ video, onClick }) => {
         display: 'flex',
         flexDirection: 'column'
       }}
-      bodyStyle={{
-        padding: 0,
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column'
+      styles={{
+        body: {
+          padding: 0,
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column'
+        }
       }}
     >
       {/* 视频缩略图区域 */}

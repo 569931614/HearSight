@@ -16,3 +16,9 @@ qdrant-client>=1.7.0
 
 # Aliyun OSS SDK
 oss2>=2.18.0
+
+# OpenAI SDK (兼容阿里云 DashScope API)
+openai>=1.0.0
+
+# JWT 认证
+PyJWT>=2.8.0

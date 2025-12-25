@@ -5,7 +5,8 @@ import type {
   TranscriptDetailResponse,
   SummarizeResponse,
   Segment,
-  SummaryMeta
+  SummaryMeta,
+  MindMapResponse
 } from '../types'
 
 /**
@@ -365,6 +366,76 @@ export const fetchQdrantVideos = async (
 }
 
 /**
+ * 用户登录
+ */
+export const userLogin = async (username: string, password: string): Promise<{
+  access_token: string
+  token_type: string
+  user_id: number
+  username: string
+  is_admin: boolean
+}> => {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: '登录失败' }))
+    throw new Error(error.detail || '登录失败')
+  }
+
+  return response.json()
+}
+
+/**
+ * 验证 Token
+ */
+export const verifyToken = async (token: string): Promise<{
+  valid: boolean
+  user_id: string
+  username: string
+}> => {
+  const response = await fetch('/api/auth/verify', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error('Token 无效')
+  }
+
+  return response.json()
+}
+
+/**
+ * 获取当前用户信息
+ */
+export const getCurrentUser = async (token: string): Promise<{
+  id: number
+  username: string
+  email: string | null
+  is_admin: boolean
+  is_active: boolean
+  created_at: string
+}> => {
+  const response = await fetch('/api/auth/me', {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error('获取用户信息失败')
+  }
+
+  return response.json()
+}
+
+/**
  * 管理员登录
  */
 export const adminLogin = async (password: string): Promise<{
@@ -455,6 +526,22 @@ export const fetchVideoByVideoId = async (videoId: string): Promise<TranscriptDe
 
   if (!response.ok) {
     throw new Error(`获取视频段落失败：${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * 获取视频思维导图数据
+ */
+export const fetchVideoMindMap = async (videoId: string): Promise<MindMapResponse> => {
+  const response = await fetch(`/api/qdrant/videos/${videoId}/mindmap`)
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error('该视频暂无思维导图数据')
+    }
+    throw new Error(`获取思维导图失败：${response.status}`)
   }
 
   return response.json()

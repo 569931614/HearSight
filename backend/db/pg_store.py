@@ -157,6 +157,38 @@ def init_db(db_url: Optional[str] = None) -> None:
                     );
                     """
                 )
+                # 用户表
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        username VARCHAR(50) NOT NULL UNIQUE,
+                        password_hash VARCHAR(255) NOT NULL,
+                        email VARCHAR(100),
+                        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMP NOT NULL DEFAULT (now()),
+                        last_login TIMESTAMP
+                    );
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_users_username
+                    ON users(username);
+                    """
+                )
+                # 系统设置表（用于控制注册等功能）
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS system_settings (
+                        id SERIAL PRIMARY KEY,
+                        key VARCHAR(100) NOT NULL UNIQUE,
+                        value TEXT NOT NULL,
+                        updated_at TIMESTAMP NOT NULL DEFAULT (now())
+                    );
+                    """
+                )
                 # 插入默认配置
                 cur.execute(
                     """
@@ -167,6 +199,26 @@ def init_db(db_url: Optional[str] = None) -> None:
                         ('admin_password', 'admin123')
                     ON CONFLICT (config_key) DO NOTHING;
                     """
+                )
+                # 插入系统设置默认值
+                cur.execute(
+                    """
+                    INSERT INTO system_settings (key, value)
+                    VALUES
+                        ('allow_registration', 'true')
+                    ON CONFLICT (key) DO NOTHING;
+                    """
+                )
+                # 创建默认管理员用户（用户名: admin, 密码: admin123）
+                import hashlib
+                admin_password_hash = hashlib.sha256('admin123'.encode()).hexdigest()
+                cur.execute(
+                    """
+                    INSERT INTO users (username, password_hash, email, is_admin, is_active)
+                    VALUES ('admin', %s, 'admin@hearsight.com', TRUE, TRUE)
+                    ON CONFLICT (username) DO NOTHING;
+                    """,
+                    (admin_password_hash,)
                 )
     finally:
         conn.close()

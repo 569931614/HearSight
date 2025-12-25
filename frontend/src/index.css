@@ -489,14 +489,38 @@ button:focus-visible {
 .fullscreen-left-panel-content .ant-tabs,
 .fullscreen-right-panel-content .ant-tabs {
   width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fullscreen-left-panel-content .ant-tabs .ant-tabs-content-holder,
+.fullscreen-right-panel-content .ant-tabs .ant-tabs-content-holder {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
+}
+
+.fullscreen-left-panel-content .ant-tabs .ant-tabs-content,
+.fullscreen-right-panel-content .ant-tabs .ant-tabs-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
 }
 
 /* 修复标签页宽度不一致问题 */
 .fullscreen-left-panel-content .ant-tabs-tabpane,
 .fullscreen-right-panel-content .ant-tabs-tabpane {
   width: 100%;
-  overflow: hidden;
+}
+
+.fullscreen-left-panel-content .ant-tabs-tabpane.ant-tabs-tabpane-active,
+.fullscreen-right-panel-content .ant-tabs-tabpane.ant-tabs-tabpane-active {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 /* 在全屏模式下隐藏原有的三列布局 */
@@ -649,10 +673,18 @@ button:focus-visible {
   min-height: 0;
 }
 
+.left-grow-card .ant-tabs .ant-tabs-content-holder,
+.right-grow-card .ant-tabs .ant-tabs-content-holder {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .left-grow-card .ant-tabs .ant-tabs-content,
 .right-grow-card .ant-tabs .ant-tabs-content {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
 }
 
 .left-grow-card .ant-tabs .ant-tabs-tabpane.ant-tabs-tabpane-active,
@@ -760,6 +792,13 @@ button:focus-visible {
   background: white;
   border: 1px solid transparent;
   color: #262626;
+  position: relative;
+}
+
+/* 子文件夹添加左侧边框线显示层级 */
+.folder-item[style*="paddingLeft"] {
+  border-left: 2px solid #e8e8e8;
+  margin-left: -2px;
 }
 
 .folder-item:hover {
@@ -769,6 +808,10 @@ button:focus-visible {
   box-shadow: 0 2px 8px rgba(24, 144, 255, 0.15);
 }
 
+.folder-item:hover[style*="paddingLeft"] {
+  border-left-color: #91d5ff;
+}
+
 .folder-item-active {
   background: linear-gradient(135deg, #e6f7ff 0%, #d6eeff 100%) !important;
   border-color: #40a9ff !important;
@@ -776,6 +819,10 @@ button:focus-visible {
   transform: translateX(3px);
   color: #1890ff;
   font-weight: 600;
+}
+
+.folder-item-active[style*="paddingLeft"] {
+  border-left-color: #40a9ff !important;
 }
 
 .folder-item .anticon {
@@ -895,18 +942,49 @@ button:focus-visible {
 .video-list {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
   margin-bottom: 24px;
 }
 
 .video-list .video-card {
   max-width: 100%;
+  min-height: auto !important; /* 移除最小高度限制 */
+  height: auto !important; /* 允许高度自适应，覆盖内联样式 */
 }
 
 .video-list .ant-card-body {
   display: flex;
   flex-direction: row !important;
-  gap: 16px;
+  gap: 12px;
+  padding: 8px !important;
+  height: auto !important; /* 移除 100% 高度 */
+}
+
+/* 列表模式下的缩略图容器 */
+.video-list .ant-card-body > div:first-child {
+  width: 120px !important;
+  min-width: 120px !important;
+  padding-top: 68px !important; /* 16:9 比例 (68/120 ≈ 56.67%) */
+  flex-shrink: 0;
+}
+
+/* 列表模式下的信息区域 */
+.video-list .ant-card-body > div:last-child {
+  flex: 1;
+  padding: 4px 0 !important;
+  min-width: 0; /* 允许内容收缩 */
+}
+
+/* 列表模式下文字大小优化 */
+.video-list .ant-card-body .ant-typography {
+  font-size: 13px !important;
+  line-height: 18px !important;
+}
+
+.video-list .ant-card-body .ant-tag {
+  font-size: 11px !important;
+  padding: 0 6px !important;
+  line-height: 20px !important;
 }
 
 /* 分页器 */
@@ -980,3 +1058,89 @@ button:focus-visible {
 }
 
 /* ===== 视频展示页面样式结束 ===== */
+
+/* ===== 思维导图样式 ===== */
+
+/* 思维导图容器样式 */
+.mindmap-container {
+  width: 100%;
+  height: 100%;
+  min-height: 400px;
+  position: relative;
+  overflow: hidden;
+  background-color: #fafafa;
+  border-radius: 4px;
+}
+
+/* Markmap SVG 样式 */
+.mindmap-container svg {
+  width: 100%;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+/* Markmap 节点样式 */
+.mindmap-container .markmap-node {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mindmap-container .markmap-node:hover {
+  opacity: 0.8;
+}
+
+/* Markmap 链接样式 */
+.mindmap-container .markmap-link {
+  fill: none;
+  stroke: #d9d9d9;
+  stroke-width: 2px;
+}
+
+/* Markmap 文本样式 */
+.mindmap-container .markmap-foreign {
+  padding: 4px 8px;
+  border-radius: 4px;
+  background-color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* 工具栏样式 */
+.mindmap-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 8px 12px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 确保 markmap 库的样式正确加载 */
+.markmap-container text {
+  fill: #333;
+  font-size: 14px;
+}
+
+.markmap-container rect {
+  rx: 4;
+  ry: 4;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .mindmap-container {
+    min-height: 300px;
+  }
+
+  .mindmap-toolbar {
+    flex-wrap: wrap;
+    padding: 6px 8px;
+  }
+}
+
+/* ===== 思维导图样式结束 ===== */

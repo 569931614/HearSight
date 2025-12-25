@@ -17,6 +17,9 @@ from backend.routers.media import router as media_router
 from backend.routers.knowledge import router as knowledge_router
 from backend.routers.admin import router as admin_router
 from backend.routers.qdrant_rag import router as qdrant_rag_router
+# 暂时注释掉，需要先解决 PyJWT 依赖问题
+# from backend.routers.auth import router as auth_router
+# from backend.routers.admin_panel import router as admin_panel_router
 
 
 
@@ -85,6 +88,9 @@ app.include_router(media_router)
 app.include_router(knowledge_router)
 app.include_router(admin_router)
 app.include_router(qdrant_rag_router)
+# 暂时注释掉，需要先解决 PyJWT 依赖问题
+# app.include_router(auth_router)
+# app.include_router(admin_panel_router)
 
 
 # 启动后台worker：简单串行处理下载+ASR+摘要，避免阻塞请求线程

@@ -17,6 +17,7 @@ import {
 import { DeleteOutlined, PlusOutlined, FolderOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { SummaryMeta } from '../types'
 import { deleteChatHistory, fetchQdrantFolders, fetchQdrantVideos } from '../services/api'
+import { sortVideosNaturally } from '../utils/sorting'
 
 // Removed deprecated Panel extraction from Collapse
 
@@ -224,7 +225,7 @@ const LeftPanel: React.FC<LeftPanelProps> = ({
                         <List
                           split={false}
                           size="small"
-                          dataSource={summaries}
+                          dataSource={sortVideosNaturally(summaries, 'video_title' as any)}
                           renderItem={(item: any, index: number) => {
                             // 处理两种数据格式：
                             // 1. PostgreSQL summaries: { transcript_id, summary_count, created_at }
@@ -315,6 +316,146 @@ interface VideoFoldersProps {
   onLoadTranscript: (id: number | string) => void
 }
 
+// 构建文件夹树形结构
+const buildFolderTree = (folders: any[]): any[] => {
+  const folderMap = new Map<string, any>()
+  const rootFolders: any[] = []
+
+  // 第一遍：创建所有节点的映射
+  folders.forEach(folder => {
+    const folderId = folder.folder_id || folder.id
+    folderMap.set(folderId, {
+      ...folder,
+      children: []
+    })
+  })
+
+  // 第二遍：构建树形结构
+  folders.forEach(folder => {
+    const folderId = folder.folder_id || folder.id
+    const parentId = folder.parent_id || folder.parent_folder_id
+    const node = folderMap.get(folderId)
+
+    if (parentId && folderMap.has(parentId)) {
+      // 有父节点，添加到父节点的 children
+      folderMap.get(parentId).children.push(node)
+    } else {
+      // 没有父节点，作为根节点
+      rootFolders.push(node)
+    }
+  })
+
+  return rootFolders
+}
+
+// 渲染文件夹树（递归）
+const renderFolderTree = (
+  folders: any[],
+  level: number,
+  expandedKeys: string[],
+  loadingVideos: Record<string, boolean>,
+  folderVideos: Record<string, any[]>,
+  onLoadTranscript: (id: number | string) => void,
+  handlePanelChange: (keys: string | string[]) => void
+): any[] => {
+  return folders.map(folder => {
+    const folderId = folder.folder_id || folder.id
+    const folderName = folder.folder_name || folder.name || '未命名'
+    const videoCount = folder.video_count || 0
+    const videos = folderVideos[folderId] || []
+    const isLoading = loadingVideos[folderId]
+    const hasChildren = folder.children && folder.children.length > 0
+
+    return {
+      key: folderId,
+      label: (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <FolderOutlined />
+          <span>{folderName}</span>
+          <Badge count={videoCount} style={{ backgroundColor: '#52c41a' }} />
+        </div>
+      ),
+      style: { paddingLeft: level * 0 }, // Collapse 组件会自动处理缩进
+      children: (
+        <>
+          {/* 视频列表 */}
+          {isLoading ? (
+            <div style={{ textAlign: 'center', padding: '20px' }}>
+              <Spin size="small" tip="加载视频..." />
+            </div>
+          ) : videos.length === 0 && !hasChildren ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="文件夹为空" style={{ margin: '20px 0' }} />
+          ) : videos.length > 0 ? (
+            <List
+              split={false}
+              size="small"
+              dataSource={sortVideosNaturally(videos, 'video_title' as any)}
+              renderItem={(item: any) => {
+                const isQdrantVideo = 'video_id' in item
+                const displayTitle = isQdrantVideo
+                  ? (item.video_title || `视频 ${item.video_id.substring(0, 8)}`)
+                  : `视频 #${item.transcript_id}`
+                const displayMeta = isQdrantVideo
+                  ? `${item.total_segments || 0} 个片段`
+                  : `${item.summary_count} 条摘要`
+
+                return (
+                  <List.Item
+                    className="hist-item"
+                    style={{ paddingLeft: 16 }}
+                  >
+                    <div className="hist-main" style={{ width: '100%' }}>
+                      <div
+                        className="hist-title"
+                        style={{ cursor: 'pointer', marginBottom: 4 }}
+                        onClick={() => {
+                          if (isQdrantVideo) {
+                            onLoadTranscript(item.video_id)
+                          } else {
+                            onLoadTranscript(item.transcript_id)
+                          }
+                        }}
+                        title={`点击查看: ${displayTitle}`}
+                      >
+                        {displayTitle}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#999' }}>
+                        {displayMeta}
+                        {item.created_at && ` · ${item.created_at}`}
+                      </div>
+                    </div>
+                  </List.Item>
+                )
+              }}
+            />
+          ) : null}
+
+          {/* 子文件夹 */}
+          {hasChildren && (
+            <div style={{ marginTop: videos.length > 0 ? 8 : 0 }}>
+              <Collapse
+                bordered={false}
+                activeKey={expandedKeys}
+                onChange={handlePanelChange}
+                expandIconPosition="end"
+                items={renderFolderTree(
+                  folder.children,
+                  level + 1,
+                  expandedKeys,
+                  loadingVideos,
+                  folderVideos,
+                  onLoadTranscript,
+                  handlePanelChange
+                )}
+              />
+            </div>
+          )}
+        </>
+      )
+    }
+  })
+}
+
 const VideoFolders: React.FC<VideoFoldersProps> = ({ onLoadTranscript }) => {
   const { message } = App.useApp()
   const [folders, setFolders] = useState<any[]>([])
@@ -377,6 +518,9 @@ const VideoFolders: React.FC<VideoFoldersProps> = ({ onLoadTranscript }) => {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文件夹" />
   }
 
+  // 构建树形结构
+  const folderTree = buildFolderTree(folders)
+
   return (
     <div className="hist-scroll">
       <Collapse
@@ -384,74 +528,15 @@ const VideoFolders: React.FC<VideoFoldersProps> = ({ onLoadTranscript }) => {
         activeKey={expandedKeys}
         onChange={handlePanelChange}
         expandIconPosition="end"
-        items={folders.map(folder => {
-          const folderId = folder.folder_id || folder.id
-          const folderName = folder.folder_name || folder.name || '未命名'
-          const videoCount = folder.video_count || 0
-          const videos = folderVideos[folderId] || []
-          const isLoading = loadingVideos[folderId]
-
-          return {
-            key: folderId,
-            label: (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <FolderOutlined />
-                <span>{folderName}</span>
-                <Badge count={videoCount} style={{ backgroundColor: '#52c41a' }} />
-              </div>
-            ),
-            children: isLoading ? (
-              <div style={{ textAlign: 'center', padding: '20px' }}>
-                <Spin size="small" tip="加载视频..." />
-              </div>
-            ) : videos.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="文件夹为空" style={{ margin: '20px 0' }} />
-            ) : (
-              <List
-                split={false}
-                size="small"
-                dataSource={videos}
-                renderItem={(item: any) => {
-                  const isQdrantVideo = 'video_id' in item
-                  const displayTitle = isQdrantVideo
-                    ? (item.video_title || `视频 ${item.video_id.substring(0, 8)}`)
-                    : `视频 #${item.transcript_id}`
-                  const displayMeta = isQdrantVideo
-                    ? `${item.total_segments || 0} 个片段`
-                    : `${item.summary_count} 条摘要`
-
-                  return (
-                    <List.Item
-                      className="hist-item"
-                      style={{ paddingLeft: 16 }}
-                    >
-                      <div className="hist-main" style={{ width: '100%' }}>
-                        <div
-                          className="hist-title"
-                          style={{ cursor: 'pointer', marginBottom: 4 }}
-                          onClick={() => {
-                            if (isQdrantVideo) {
-                              onLoadTranscript(item.video_id)
-                            } else {
-                              onLoadTranscript(item.transcript_id)
-                            }
-                          }}
-                          title={`点击查看: ${displayTitle}`}
-                        >
-                          {displayTitle}
-                        </div>
-                        <div style={{ fontSize: 11, color: '#999' }}>
-                          {displayMeta}
-                          {item.created_at && ` · ${item.created_at}`}
-                        </div>
-                      </div>
-                    </List.Item>
-                  )
-                }}
-              />
-            )
-          }
-        })}
+        items={renderFolderTree(
+          folderTree,
+          0,
+          expandedKeys,
+          loadingVideos,
+          folderVideos,
+          onLoadTranscript,
+          handlePanelChange
+        )}
       />
     </div>
   )

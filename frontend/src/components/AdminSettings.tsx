@@ -21,12 +21,13 @@ export default function AdminSettings({ visible, onClose }: AdminSettingsProps) 
 
   // 检查本地存储的 token
   useEffect(() => {
+    if (!visible) return
     const token = localStorage.getItem('admin_token')
     if (token) {
       setAdminToken(token)
       loadConfigs(token)
     }
-  }, [])
+  }, [visible])
 
   // 登录
   const handleLogin = async (values: { password: string }) => {
@@ -52,12 +53,16 @@ export default function AdminSettings({ visible, onClose }: AdminSettingsProps) 
       const result = await getAdminConfigs(token)
       setConfigs(result.configs)
       setIsLoggedIn(true)
-      // 设置表单初始值
-      configForm.setFieldsValue({
-        system_prompt: result.configs.system_prompt || '',
-        site_title: result.configs.site_title || '',
-        admin_password: result.configs.admin_password || ''
-      })
+      // 设置表单初始值，延迟确保表单已经挂载
+      setTimeout(() => {
+        configForm.setFieldsValue({
+          system_prompt: result.configs.system_prompt || '',
+          mindmap_prompt: result.configs.mindmap_prompt || '',
+          dashscope_api_key: result.configs.dashscope_api_key || '',
+          site_title: result.configs.site_title || '',
+          admin_password: result.configs.admin_password || ''
+        })
+      }, 0)
     } catch (error: any) {
       message.error(error.message || '加载配置失败')
       // 如果token无效，清除登录状态
@@ -155,22 +160,67 @@ export default function AdminSettings({ visible, onClose }: AdminSettingsProps) 
                     </Form.Item>
 
                     <Form.Item
-                      label="系统提示词"
-                      name="system_prompt"
-                      tooltip="AI对话时使用的系统提示词，决定了AI的回答风格"
-                    >
-                      <TextArea
-                        rows={8}
-                        placeholder="请输入系统提示词..."
-                      />
-                    </Form.Item>
-
-                    <Form.Item
                       label="管理员密码"
                       name="admin_password"
                       tooltip="修改后需要重新登录"
                     >
                       <Input.Password placeholder="留空则不修改" />
+                    </Form.Item>
+
+                    <Form.Item>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <Button type="primary" htmlType="submit" loading={loading}>
+                          保存配置
+                        </Button>
+                        <Button onClick={handleLogout}>
+                          退出登录
+                        </Button>
+                      </div>
+                    </Form.Item>
+                  </Form>
+                )
+              },
+              {
+                key: 'ai',
+                label: 'AI 配置',
+                children: (
+                  <Form
+                    form={configForm}
+                    onFinish={handleSaveConfig}
+                    layout="vertical"
+                  >
+                    <Form.Item
+                      label="阿里云 DashScope API Key"
+                      name="dashscope_api_key"
+                      tooltip="用于思维导图生成的阿里云通义千问 API Key，格式：sk-xxxxxx"
+                      rules={[{ required: false, message: '请输入 DashScope API Key' }]}
+                    >
+                      <Input.Password
+                        placeholder="sk-xxxxxx"
+                        autoComplete="off"
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="对话系统提示词"
+                      name="system_prompt"
+                      tooltip="AI对话时使用的系统提示词，决定了AI的回答风格和行为"
+                    >
+                      <TextArea
+                        rows={6}
+                        placeholder="请输入对话系统提示词...&#10;例如：你是一个专业的视频内容分析助手，可以帮助用户理解和分析视频内容..."
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="思维导图生成提示词"
+                      name="mindmap_prompt"
+                      tooltip="用于生成视频思维导图的 AI 提示词，指导 AI 如何从视频内容生成结构化的思维导图"
+                    >
+                      <TextArea
+                        rows={8}
+                        placeholder="请输入思维导图生成提示词...&#10;例如：请根据以下视频内容，生成一个清晰的思维导图（Markdown 格式）：&#10;1. 提取视频的主要主题作为根节点&#10;2. 识别2-3个核心分支&#10;3. 每个分支下列出关键要点&#10;4. 使用中文输出&#10;5. 格式要求：使用 # 表示一级标题，## 表示二级标题，### 表示三级标题"
+                      />
                     </Form.Item>
 
                     <Form.Item>

@@ -18,7 +18,8 @@ from pydantic import BaseModel
 from backend.vector_utils import VideoQdrantClient
 from backend.vector_utils.embedder import EmbeddingService
 from backend.rag_utils import format_rag_context, format_rag_system_prompt
-from config import get_config
+from backend.db.pg_store import get_config
+from config import get_config as get_env_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/qdrant", tags=["qdrant-rag"])
@@ -29,6 +30,157 @@ _video_list_cache = {
     "timestamp": None,
     "ttl": 60  # Cache for 60 seconds
 }
+
+
+def get_mindmap_prompt() -> str:
+    """
+    获取思维导图生成提示词
+
+    从数据库配置中获取管理员设置的思维导图生成提示词，
+    如果未设置则使用默认提示词。
+
+    Returns:
+        str: 思维导图生成提示词
+    """
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        logger.warning("DATABASE_URL not set, using default mindmap prompt")
+        return get_default_mindmap_prompt()
+
+    try:
+        prompt = get_config(db_url, "mindmap_prompt")
+        if prompt and prompt.strip():
+            return prompt
+        else:
+            logger.info("mindmap_prompt not configured, using default")
+            return get_default_mindmap_prompt()
+    except Exception as e:
+        logger.error(f"Failed to get mindmap_prompt from database: {e}")
+        return get_default_mindmap_prompt()
+
+
+def get_default_mindmap_prompt() -> str:
+    """
+    获取默认的思维导图生成提示词
+
+    Returns:
+        str: 默认提示词
+    """
+    return """请根据以下视频内容，生成一个清晰、结构化的思维导图（Markdown 格式）：
+
+要求：
+1. 提取视频的主要主题作为根节点（一级标题，使用 #）
+2. 识别2-5个核心分支作为二级标题（使用 ##）
+3. 每个分支下列出2-4个关键要点作为三级标题（使用 ###）
+4. 必要时可以添加四级标题（使用 ####）来展示更详细的内容
+5. 使用中文输出
+6. 保持层次清晰，逻辑连贯
+7. 每个节点内容简洁明了，控制在10-20字以内
+
+格式示例：
+# 视频主题
+## 核心分支1
+### 要点1.1
+### 要点1.2
+## 核心分支2
+### 要点2.1
+### 要点2.2
+
+请基于视频内容生成思维导图：
+"""
+
+
+async def generate_mindmap_for_video(video_id: str, qdrant_client: VideoQdrantClient) -> str:
+    """
+    为视频自动生成思维导图
+
+    Args:
+        video_id: 视频 ID
+        qdrant_client: Qdrant 客户端
+
+    Returns:
+        str: 生成的思维导图 Markdown 内容
+
+    Raises:
+        HTTPException: 当生成失败时
+    """
+    try:
+        from openai import OpenAI
+
+        # 1. 获取视频内容
+        video_data = qdrant_client.get_video_paragraphs_by_video_id(video_id)
+        if not video_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Video not found: {video_id}"
+            )
+
+        # 2. 构建视频内容文本（包含标题、总结和所有段落）
+        video_title = video_data.get('video_title', '未知标题')
+        summary = video_data.get('summary', '')
+        segments = video_data.get('segments', [])
+
+        video_content = f"视频标题: {video_title}\n\n"
+        if summary:
+            video_content += f"视频总结: {summary}\n\n"
+
+        video_content += "视频内容:\n"
+        for i, segment in enumerate(segments[:50], 1):  # 限制最多50个段落，避免token过多
+            text = segment.get('text', '')
+            if text:
+                video_content += f"{i}. {text}\n"
+
+        # 限制内容长度（约4000字符，避免超出上下文限制）
+        if len(video_content) > 4000:
+            video_content = video_content[:4000] + "\n...(内容过长，已截断)"
+
+        logger.info(f"[mindmap] Video content prepared: {len(video_content)} chars")
+
+        # 3. 获取思维导图生成提示词
+        mindmap_prompt = get_mindmap_prompt()
+
+        # 4. 获取阿里云通义千问 API Key（从数据库配置读取）
+        # 使用 None 让它从环境变量读取数据库配置（POSTGRES_HOST 等）
+        api_key = get_config(None, "dashscope_api_key")
+
+        if not api_key or not api_key.strip():
+            raise HTTPException(
+                status_code=500,
+                detail="DashScope API Key not configured. Please set it in Admin Settings."
+            )
+
+        # 5. 调用阿里云通义千问 API
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+
+        logger.info(f"[mindmap] Calling DashScope API to generate mind map...")
+
+        completion = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[
+                {"role": "system", "content": "你是一个专业的思维导图生成助手，擅长从视频内容中提取关键信息并组织成清晰的思维导图结构。"},
+                {"role": "user", "content": f"{mindmap_prompt}\n\n{video_content}"}
+            ],
+            temperature=0.7,
+            max_tokens=2000
+        )
+
+        mind_map_markdown = completion.choices[0].message.content.strip()
+
+        logger.info(f"[mindmap] Mind map generated successfully: {len(mind_map_markdown)} chars")
+
+        return mind_map_markdown
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate mind map: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate mind map: {str(e)}"
+        )
 
 
 class QdrantChatRequest(BaseModel):
@@ -53,7 +205,7 @@ class QdrantSearchRequest(BaseModel):
 def get_qdrant_client(request: Request) -> VideoQdrantClient:
     """Get or create Qdrant client from app state"""
     if not hasattr(request.app.state, 'qdrant_client'):
-        cfg = get_config()
+        cfg = get_env_config()
         qdrant_url = os.environ.get('QDRANT_URL', 'http://localhost:6333')
         qdrant_api_key = os.environ.get('QDRANT_API_KEY') or None
 
@@ -203,7 +355,7 @@ async def qdrant_chat(payload: QdrantChatRequest, request: Request) -> Dict[str,
         rag_context = format_rag_context(results, include_summaries=rag_include_summaries)
 
         # Get LLM config
-        cfg = get_config()
+        cfg = get_env_config()
         api_key = cfg.OPENAI_API_KEY or os.environ.get("OPENAI_API_KEY")
         base_url = cfg.OPENAI_BASE_URL or os.environ.get("OPENAI_BASE_URL")
         model = cfg.OPENAI_CHAT_MODEL or os.environ.get("OPENAI_CHAT_MODEL")
@@ -405,41 +557,6 @@ async def qdrant_health(request: Request) -> Dict[str, Any]:
         }
 
 
-@router.get("/folders")
-async def qdrant_list_folders(request: Request) -> Dict[str, Any]:
-    """
-    List all folders from Qdrant
-
-    Returns:
-        folders: List of folder metadata with video counts
-    """
-    try:
-        qdrant_client = get_qdrant_client(request)
-
-        if not qdrant_client.check_connection():
-            raise HTTPException(
-                status_code=503,
-                detail="Qdrant connection unavailable"
-            )
-
-        folders = qdrant_client.list_folders()
-        logger.info(f"[qdrant] Retrieved {len(folders)} folders")
-
-        return {
-            "folders": folders,
-            "total": len(folders)
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to list folders: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to list folders: {str(e)}"
-        )
-
-
 @router.get("/videos")
 async def qdrant_list_videos(
     request: Request,
@@ -608,6 +725,163 @@ async def qdrant_get_video_paragraphs(video_id: str, request: Request) -> Dict[s
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get video paragraphs: {str(e)}"
+        )
+
+
+@router.get("/videos/{video_id}/mindmap")
+async def qdrant_get_video_mindmap(video_id: str, request: Request, auto_generate: bool = True) -> Dict[str, Any]:
+    """
+    Get video mind map by video_id from Qdrant
+
+    This endpoint retrieves mind map markdown content for a specific video.
+    If the mind map doesn't exist and auto_generate=True, it will automatically
+    generate one using AI.
+
+    Args:
+        video_id: Video ID (MD5 hash)
+        auto_generate: Whether to auto-generate mind map if not found (default: True)
+
+    Returns:
+        video_id: Video ID
+        mind_map_markdown: Mind map content in Markdown format
+        generated_at: Timestamp when mind map was generated
+        version: Mind map format version
+        auto_generated: Whether the mind map was auto-generated (True/False)
+    """
+    try:
+        qdrant_client = get_qdrant_client(request)
+
+        if not qdrant_client.check_connection():
+            raise HTTPException(
+                status_code=503,
+                detail="Qdrant connection unavailable"
+            )
+
+        # Get mind map data from Qdrant
+        mind_map_data = qdrant_client.get_video_mindmap_by_video_id(video_id)
+
+        if mind_map_data:
+            logger.info(f"[qdrant] Retrieved existing video mind map: video_id={video_id}")
+            mind_map_data["auto_generated"] = False
+            return mind_map_data
+
+        # Mind map not found - auto-generate if enabled
+        if not auto_generate:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Mind map not found for this video"
+            )
+
+        logger.info(f"[qdrant] Mind map not found, auto-generating for video_id={video_id}")
+
+        # Generate mind map using AI
+        mind_map_markdown = await generate_mindmap_for_video(video_id, qdrant_client)
+
+        # Store the generated mind map
+        success = qdrant_client.update_video_mindmap(
+            video_id=video_id,
+            mind_map_markdown=mind_map_markdown,
+            version="1.0"
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save auto-generated mind map"
+            )
+
+        logger.info(f"[qdrant] Auto-generated and saved mind map: video_id={video_id}, size={len(mind_map_markdown)} bytes")
+
+        # Return the newly generated mind map
+        return {
+            "video_id": video_id,
+            "mind_map_markdown": mind_map_markdown,
+            "generated_at": datetime.now().isoformat(),
+            "version": "1.0",
+            "auto_generated": True
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get video mind map from Qdrant: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get video mind map: {str(e)}"
+        )
+
+
+@router.put("/videos/{video_id}/mindmap")
+async def qdrant_update_video_mindmap(
+    video_id: str,
+    request: Request,
+    mind_map_markdown: str,
+    version: str = "1.0"
+) -> Dict[str, Any]:
+    """
+    Update video mind map in Qdrant
+
+    This endpoint stores or updates mind map markdown content for a specific video.
+
+    Args:
+        video_id: Video ID (MD5 hash)
+        mind_map_markdown: Mind map content in Markdown format
+        version: Mind map format version (default: "1.0")
+
+    Returns:
+        success: Whether the operation succeeded
+        message: Success or error message
+    """
+    try:
+        qdrant_client = get_qdrant_client(request)
+
+        if not qdrant_client.check_connection():
+            raise HTTPException(
+                status_code=503,
+                detail="Qdrant connection unavailable"
+            )
+
+        # Validate mind map content
+        if not mind_map_markdown or len(mind_map_markdown.strip()) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Mind map markdown content cannot be empty"
+            )
+
+        # Limit mind map size (10MB)
+        if len(mind_map_markdown) > 10 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail="Mind map content exceeds maximum size (10MB)"
+            )
+
+        # Update mind map in Qdrant
+        success = qdrant_client.update_video_mindmap(
+            video_id=video_id,
+            mind_map_markdown=mind_map_markdown,
+            version=version
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Video not found: {video_id}"
+            )
+
+        logger.info(f"[qdrant] Updated video mind map: video_id={video_id}, size={len(mind_map_markdown)} bytes")
+
+        return {
+            "success": True,
+            "message": "Mind map updated successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update video mind map in Qdrant: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update video mind map: {str(e)}"
         )
 
 

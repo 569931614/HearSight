@@ -75,3 +75,27 @@ export interface SummarizeResponse {
 export interface SummariesResponse {
   items: SummaryMeta[]
 }
+
+// 思维导图数据类型
+export interface MindMapData {
+  video_id: string
+  mind_map_markdown: string
+  generated_at: string
+  version: string
+}
+
+// 思维导图API响应类型
+export interface MindMapResponse {
+  video_id: string
+  mind_map_markdown: string
+  generated_at: string
+  version: string
+}
+
+// MindMapViewer 组件属性
+export interface MindMapViewerProps {
+  videoId: string
+  markdown: string | null
+  loading?: boolean
+  error?: string | null
+}

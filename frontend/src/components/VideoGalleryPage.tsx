@@ -16,10 +16,13 @@ import {
   MessageOutlined,
   SearchOutlined,
   AppstoreOutlined,
-  UnorderedListOutlined
+  UnorderedListOutlined,
+  DownOutlined,
+  RightOutlined
 } from '@ant-design/icons'
 import VideoCard from './VideoCard'
 import { fetchQdrantFolders, fetchQdrantVideos } from '../services/api'
+import { sortVideosNaturally } from '../utils/sorting'
 
 const { Search } = Input
 
@@ -59,7 +62,7 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
   // 加载视频列表（初始加载或筛选变化时）
   useEffect(() => {
     loadVideos()
-  }, [currentPage, selectedFolderId])
+  }, [currentPage, selectedFolderId, searchQuery])
 
   const loadFolders = async () => {
     setLoadingFolders(true)
@@ -76,7 +79,11 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
   const loadVideos = async () => {
     setLoadingVideos(true)
     try {
-      const result = await fetchQdrantVideos(currentPage, pageSize, selectedFolderId)
+      // 如果有搜索关键词，加载所有视频以支持全局搜索
+      const effectivePageSize = searchQuery ? 1000 : pageSize
+      const effectivePage = searchQuery ? 1 : currentPage
+
+      const result = await fetchQdrantVideos(effectivePage, effectivePageSize, selectedFolderId)
       setVideos(result.videos || [])
       setTotalVideos(result.pagination?.total || 0)
     } catch (error: any) {
@@ -97,16 +104,112 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
 
   const handleSearch = (value: string) => {
     setSearchQuery(value)
-    // TODO: 实现搜索功能
-    message.info('搜索功能开发中...')
+    // 搜索功能已实现：通过 filteredVideos 自动过滤
+  }
+
+  // 切换文件夹展开/折叠状态
+  const toggleFolderExpand = (folderId: string, e: React.MouseEvent) => {
+    e.stopPropagation() // 阻止触发父元素的 onClick
+    setExpandedFolderKeys(prev => {
+      if (prev.includes(folderId)) {
+        return prev.filter(id => id !== folderId)
+      } else {
+        return [...prev, folderId]
+      }
+    })
   }
 
   // 过滤视频（根据搜索关键词）
-  const filteredVideos = videos.filter(video => {
-    if (!searchQuery) return true
-    const title = video.video_title || video.topic || ''
-    return title.toLowerCase().includes(searchQuery.toLowerCase())
-  })
+  const filteredVideos = sortVideosNaturally(
+    videos.filter(video => {
+      if (!searchQuery) return true
+      const title = video.video_title || video.topic || ''
+      return title.toLowerCase().includes(searchQuery.toLowerCase())
+    }),
+    'video_title' as any
+  )
+
+  // 构建文件夹树形结构
+  const buildFolderTree = (folders: any[]): any[] => {
+    const folderMap = new Map<string, any>()
+    const rootFolders: any[] = []
+
+    // 第一遍：创建所有节点的映射
+    folders.forEach(folder => {
+      const folderId = folder.folder_id || folder.id
+      folderMap.set(folderId, {
+        ...folder,
+        children: []
+      })
+    })
+
+    // 第二遍：构建树形结构
+    folders.forEach(folder => {
+      const folderId = folder.folder_id || folder.id
+      const parentId = folder.parent_id || folder.parent_folder_id
+      const node = folderMap.get(folderId)
+
+      if (parentId && folderMap.has(parentId)) {
+        // 有父节点，添加到父节点的 children
+        folderMap.get(parentId).children.push(node)
+      } else {
+        // 没有父节点，作为根节点
+        rootFolders.push(node)
+      }
+    })
+
+    return rootFolders
+  }
+
+  // 递归渲染文件夹树
+  const renderFolderItem = (folder: any, level: number = 0) => {
+    const folderId = folder.folder_id || folder.id
+    const folderName = folder.folder_name || folder.name || '未命名'
+    const videoCount = folder.video_count || 0
+    const isActive = selectedFolderId === folderId
+    const hasChildren = folder.children && folder.children.length > 0
+    const isExpanded = expandedFolderKeys.includes(folderId)
+
+    return (
+      <React.Fragment key={folderId}>
+        <div
+          className={`folder-item ${isActive ? 'folder-item-active' : ''}`}
+          style={{ paddingLeft: `${level * 20 + 12}px` }}
+          onClick={() => handleFolderClick(folderId)}
+        >
+          {/* 展开/折叠图标（仅当有子文件夹时显示） */}
+          {hasChildren ? (
+            <span
+              onClick={(e) => toggleFolderExpand(folderId, e)}
+              style={{
+                cursor: 'pointer',
+                marginRight: '4px',
+                display: 'inline-flex',
+                alignItems: 'center'
+              }}
+            >
+              {isExpanded ? <DownOutlined style={{ fontSize: '12px' }} /> : <RightOutlined style={{ fontSize: '12px' }} />}
+            </span>
+          ) : (
+            <span style={{ width: '16px', display: 'inline-block' }} />
+          )}
+
+          <FolderOutlined />
+          <span className="folder-name">{folderName}</span>
+          <Badge
+            count={videoCount}
+            style={{ backgroundColor: isActive ? '#1890ff' : '#52c41a' }}
+            overflowCount={999}
+          />
+        </div>
+
+        {/* 只有展开状态时才显示子文件夹 */}
+        {hasChildren && isExpanded && folder.children.map((child: any) => renderFolderItem(child, level + 1))}
+      </React.Fragment>
+    )
+  }
+
+  const folderTree = buildFolderTree(folders)
 
   return (
     <div className="video-gallery-page">
@@ -118,7 +221,7 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
         <div className="sidebar-content">
           {loadingFolders ? (
             <div style={{ textAlign: 'center', padding: '40px' }}>
-              <Spin tip="加载中..." />
+              <Spin />
             </div>
           ) : (
             <div className="folder-list">
@@ -136,29 +239,8 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
                 />
               </div>
 
-              {/* 文件夹列表 */}
-              {folders.map(folder => {
-                const folderId = folder.folder_id || folder.id
-                const folderName = folder.folder_name || folder.name || '未命名'
-                const videoCount = folder.video_count || 0
-                const isActive = selectedFolderId === folderId
-
-                return (
-                  <div
-                    key={folderId}
-                    className={`folder-item ${isActive ? 'folder-item-active' : ''}`}
-                    onClick={() => handleFolderClick(folderId)}
-                  >
-                    <FolderOutlined />
-                    <span className="folder-name">{folderName}</span>
-                    <Badge
-                      count={videoCount}
-                      style={{ backgroundColor: isActive ? '#1890ff' : '#52c41a' }}
-                      overflowCount={999}
-                    />
-                  </div>
-                )
-              })}
+              {/* 文件夹树形列表 */}
+              {folderTree.map(folder => renderFolderItem(folder, 0))}
             </div>
           )}
         </div>
@@ -216,14 +298,14 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
         {/* 视频内容区域 */}
         <div className="gallery-content">
           {loadingVideos ? (
-            <div style={{
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              height: '400px'
-            }}>
-              <Spin size="large" tip="加载视频中..." />
-            </div>
+            <Spin size="large" tip="加载视频中...">
+              <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                height: '400px'
+              }} />
+            </Spin>
           ) : filteredVideos.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -244,7 +326,7 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
               </div>
 
               {/* 分页 */}
-              {totalVideos > pageSize && (
+              {!searchQuery && totalVideos > pageSize && (
                 <div className="gallery-pagination">
                   <Pagination
                     current={currentPage}
@@ -255,6 +337,12 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
                     showQuickJumper
                     showTotal={(total) => `共 ${total} 个视频`}
                   />
+                </div>
+              )}
+              {/* 搜索时显示结果统计 */}
+              {searchQuery && filteredVideos.length > 0 && (
+                <div style={{ textAlign: 'center', padding: '20px 0', color: '#666' }}>
+                  找到 {filteredVideos.length} 个匹配的视频
                 </div>
               )}
             </>

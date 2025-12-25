@@ -1,9 +1,9 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import './index.css'
 import { Layout, Typography, Button, Space, Tag, Modal, App as AntdApp } from 'antd'
-import { CloseOutlined, LeftOutlined, MessageOutlined, SettingOutlined } from '@ant-design/icons'
+import { CloseOutlined, LeftOutlined, MessageOutlined, SettingOutlined, LogoutOutlined } from '@ant-design/icons'
 import { extractFilename, seekVideoTo } from './utils'
-import { fetchTranscriptDetail, fetchAllSummaries, fetchQdrantVideos, getPublicConfig, fetchTranscriptIdByPath, fetchVideoByVideoId } from './services/api'
+import { fetchTranscriptDetail, fetchAllSummaries, fetchQdrantVideos, getPublicConfig, fetchTranscriptIdByPath, fetchVideoByVideoId, fetchVideoMindMap, getCurrentUser } from './services/api'
 import type { Segment, SummaryMeta, TranscriptDetailResponse } from './types'
 import LeftPanel from './components/LeftPanel'
 import VideoPlayer from './components/VideoPlayer'
@@ -11,6 +11,8 @@ import RightPanel from './components/RightPanel'
 import ChatPanel from './components/ChatPanel'
 import AdminSettings from './components/AdminSettings'
 import VideoGalleryPage from './components/VideoGalleryPage'
+import AdminPanel from './components/AdminPanel'
+import LoginPage from './components/LoginPage'
 
 const { Header, Footer } = Layout
 const { Title } = Typography
@@ -35,6 +37,10 @@ function App() {
   const [activeTranscriptId, setActiveTranscriptId] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState<boolean>(true) // 默认开启自动滚动
   const [videoSummary, setVideoSummary] = useState<string | null>(null) // 视频全文总结
+  const [mindMapMarkdown, setMindMapMarkdown] = useState<string | null>(null) // 思维导图数据
+  const [mindMapLoading, setMindMapLoading] = useState(false) // 思维导图加载状态
+  const [mindMapError, setMindMapError] = useState<string | null>(null) // 思维导图错误信息
+  const [currentVideoId, setCurrentVideoId] = useState<string | null>(null) // 当前视频ID
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState<number>(1)
@@ -48,7 +54,7 @@ function App() {
   const [videoModalVisible, setVideoModalVisible] = useState(false) // 视频播放器弹窗
 
   // 页面切换状态
-  const [currentView, setCurrentView] = useState<'gallery' | 'chat'>('gallery') // 默认显示视频展示页
+  const [currentView, setCurrentView] = useState<'gallery' | 'chat' | 'admin'>('gallery') // 默认显示视频展示页
 
   // 会话管理状态
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
@@ -57,6 +63,11 @@ function App() {
   // 管理员设置
   const [adminSettingsVisible, setAdminSettingsVisible] = useState(false)
   const [siteTitle, setSiteTitle] = useState('HearSight - AI 视频智能分析')
+
+  // 认证状态
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [authLoading, setAuthLoading] = useState(true)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const segScrollRef = useRef<HTMLDivElement | null>(null)
@@ -200,8 +211,15 @@ function App() {
       // 保存视频总结（如果有）
       if (typeof id === 'string' && (data as any).video_summary) {
         setVideoSummary((data as any).video_summary)
+        setCurrentVideoId(id) // 保存当前视频ID
+
+        // 获取思维导图数据
+        loadMindMapData(id)
       } else {
         setVideoSummary(null)
+        setCurrentVideoId(null)
+        setMindMapMarkdown(null)
+        setMindMapError(null)
       }
 
       const basename = extractFilename(data.media_path)
@@ -225,6 +243,28 @@ function App() {
       throw err
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 加载思维导图数据
+  const loadMindMapData = async (videoId: string) => {
+    try {
+      setMindMapLoading(true)
+      setMindMapError(null)
+
+      const mindMapData = await fetchVideoMindMap(videoId)
+      setMindMapMarkdown(mindMapData.mind_map_markdown)
+    } catch (err: any) {
+      console.error('获取思维导图失败:', err?.message || err)
+      // 如果是404错误，不显示错误信息，只是不显示思维导图
+      if (err?.message?.includes('404') || err?.message?.includes('暂无思维导图')) {
+        setMindMapMarkdown(null)
+        setMindMapError(null)
+      } else {
+        setMindMapError(err?.message || '加载思维导图失败')
+      }
+    } finally {
+      setMindMapLoading(false)
     }
   }
 
@@ -307,6 +347,82 @@ function App() {
     void loadSiteTitle()
   }, [])
 
+  // 检查登录状态
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = localStorage.getItem('auth_token')
+      const userInfoStr = localStorage.getItem('user_info')
+
+      if (token && userInfoStr) {
+        try {
+          const userInfo = JSON.parse(userInfoStr)
+          // 验证 token 是否有效
+          const userData = await getCurrentUser(token)
+          setCurrentUser(userData)
+          setIsAuthenticated(true)
+        } catch (error) {
+          // Token 无效，清除登录信息
+          localStorage.removeItem('auth_token')
+          localStorage.removeItem('user_info')
+          setIsAuthenticated(false)
+          setCurrentUser(null)
+        }
+      }
+      setAuthLoading(false)
+    }
+    void checkAuth()
+  }, [])
+
+  // 处理登录成功
+  const handleLoginSuccess = (token: string, userInfo: any) => {
+    setCurrentUser(userInfo)
+    setIsAuthenticated(true)
+  }
+
+  // 处理退出登录
+  const handleLogout = () => {
+    localStorage.removeItem('auth_token')
+    localStorage.removeItem('user_info')
+    setIsAuthenticated(false)
+    setCurrentUser(null)
+    setCurrentView('gallery')
+    message.success('已退出登录')
+  }
+
+  // 权限检查：进入管理后台时检查权限
+  const handleEnterAdmin = () => {
+    if (!isAuthenticated) {
+      message.warning('请先登录')
+      return
+    }
+    if (!currentUser?.is_admin) {
+      message.error('需要管理员权限')
+      return
+    }
+    setCurrentView('admin')
+  }
+
+  // 如果正在加载认证状态，显示加载中
+  if (authLoading) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        fontSize: '18px',
+        color: '#999'
+      }}>
+        加载中...
+      </div>
+    )
+  }
+
+  // 如果未登录且尝试访问管理后台，显示登录页面
+  if (!isAuthenticated && currentView === 'admin') {
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />
+  }
+
   return (
     <Layout className="fullscreen-layout">
       {/* 顶部工具栏 */}
@@ -330,21 +446,61 @@ function App() {
                 返回主页
               </Button>
             )}
-            <Button
-              type="text"
-              icon={<SettingOutlined />}
-              onClick={() => setAdminSettingsVisible(true)}
-              style={{ color: 'white' }}
-            >
-              管理员设置
-            </Button>
+            {currentView === 'admin' && (
+              <Button
+                type="primary"
+                icon={<LeftOutlined />}
+                onClick={() => setCurrentView('gallery')}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  color: 'white'
+                }}
+              >
+                返回主页
+              </Button>
+            )}
+            {currentView !== 'admin' && (
+              <>
+                <Button
+                  type="text"
+                  icon={<SettingOutlined />}
+                  onClick={handleEnterAdmin}
+                  style={{ color: 'white' }}
+                >
+                  管理后台
+                </Button>
+                <Button
+                  type="text"
+                  icon={<SettingOutlined />}
+                  onClick={() => setAdminSettingsVisible(true)}
+                  style={{ color: 'white' }}
+                >
+                  系统设置
+                </Button>
+              </>
+            )}
+            {isAuthenticated && (
+              <Button
+                type="text"
+                icon={<LogoutOutlined />}
+                onClick={handleLogout}
+                style={{ color: 'white' }}
+                title={`当前用户：${currentUser?.username}`}
+              >
+                退出登录
+              </Button>
+            )}
           </Space>
         </div>
       </Header>
       
       {/* 主内容区域 */}
       <div className="fullscreen-content">
-        {currentView === 'gallery' ? (
+        {currentView === 'admin' ? (
+          /* 管理后台页面 */
+          <AdminPanel onClose={() => setCurrentView('gallery')} />
+        ) : currentView === 'gallery' ? (
           /* 视频展示页面 */
           <VideoGalleryPage
             onVideoClick={(videoId) => {
@@ -540,6 +696,10 @@ function App() {
                   activeSegIndex={activeSegIndex}
                   autoScroll={autoScroll}
                   videoSummary={videoSummary}
+                  videoId={currentVideoId || ''}
+                  mindMapMarkdown={mindMapMarkdown}
+                  mindMapLoading={mindMapLoading}
+                  mindMapError={mindMapError}
                   onSeekTo={handleSeekTo}
                   onActiveSegmentChange={setActiveSegIndex}
                   onAutoScrollChange={setAutoScroll}
