@@ -1,0 +1,110 @@
+# HearSight - Node.js Backend Version
+# Usage: docker compose -f docker-compose.nodejs.yml up -d
+
+version: "3.8"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: hearsight-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-hearsight}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: hearsight-qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+
+  # Node.js Backend
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: hearsight-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      # Server
+      PORT: 9999
+      STATIC_DIR: /app/static
+
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-hearsight}
+
+      # Qdrant
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+
+      # Embedding API
+      QDRANT_EMBEDDING_API_URL: ${QDRANT_EMBEDDING_API_URL:-https://api.siliconflow.cn/v1}
+      QDRANT_EMBEDDING_API_KEY: ${QDRANT_EMBEDDING_API_KEY}
+      QDRANT_EMBEDDING_MODEL: ${QDRANT_EMBEDDING_MODEL:-BAAI/bge-large-zh-v1.5}
+
+      # LLM API
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+
+      # RAG
+      RAG_ENABLED: ${RAG_ENABLED:-true}
+
+      # JWT
+      JWT_SECRET: ${JWT_SECRET:-hearsight-secret-key}
+
+      # OSS (Optional)
+      OSS_ENABLED: ${OSS_ENABLED:-false}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-}
+      OSS_BUCKET: ${OSS_BUCKET:-}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:-}
+      OSS_REGION: ${OSS_REGION:-oss-cn-hangzhou}
+
+      # CORS
+      ALLOW_ORIGINS: ${ALLOW_ORIGINS:-http://localhost:10000}
+    volumes:
+      - ./app_datas/download_videos:/app/static
+    ports:
+      - "${BACKEND_PORT:-9999}:9999"
+    restart: unless-stopped
+
+  # Frontend (React)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: hearsight-frontend
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://backend:9999
+    ports:
+      - "${FRONTEND_PORT:-10000}:80"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:

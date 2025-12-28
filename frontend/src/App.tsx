@@ -1,9 +1,10 @@
 ﻿import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import './index.css'
 import { Layout, Typography, Button, Space, Tag, Modal, App as AntdApp } from 'antd'
-import { CloseOutlined, LeftOutlined, MessageOutlined, SettingOutlined, LogoutOutlined } from '@ant-design/icons'
+import { CloseOutlined, LeftOutlined, MessageOutlined, SettingOutlined, LogoutOutlined, UserOutlined, LoginOutlined } from '@ant-design/icons'
 import { extractFilename, seekVideoTo } from './utils'
-import { fetchTranscriptDetail, fetchAllSummaries, fetchQdrantVideos, getPublicConfig, fetchTranscriptIdByPath, fetchVideoByVideoId, fetchVideoMindMap, getCurrentUser } from './services/api'
+import { fetchTranscriptDetail, fetchAllSummaries, fetchQdrantVideos, getPublicConfig, fetchTranscriptIdByPath, fetchVideoByVideoId, fetchVideoMindMap, getCurrentUser, recordVideoView } from './services/api'
 import type { Segment, SummaryMeta, TranscriptDetailResponse } from './types'
 import LeftPanel from './components/LeftPanel'
 import VideoPlayer from './components/VideoPlayer'
@@ -29,6 +30,9 @@ const STORAGE_KEY_CURRENT_SESSION = 'hearsight_current_session'
 
 function App() {
   const { message } = AntdApp.useApp()
+  const navigate = useNavigate()
+  const location = useLocation()
+
   const [segments, setSegments] = useState<Array<Segment>>([])
   const [loading, setLoading] = useState(false)
   const [summaries, setSummaries] = useState<Array<SummaryMeta>>([])
@@ -53,8 +57,13 @@ function App() {
   const [chatPanelVisible, setChatPanelVisible] = useState(true) // 默认显示AI对话
   const [videoModalVisible, setVideoModalVisible] = useState(false) // 视频播放器弹窗
 
-  // 页面切换状态
-  const [currentView, setCurrentView] = useState<'gallery' | 'chat' | 'admin'>('gallery') // 默认显示视频展示页
+  // 根据 URL 路径确定当前视图
+  const getCurrentView = () => {
+    if (location.pathname === '/admin') return 'admin'
+    if (location.pathname === '/chat') return 'chat'
+    return 'gallery'
+  }
+  const currentView = getCurrentView()
 
   // 会话管理状态
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
@@ -68,6 +77,7 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [authLoading, setAuthLoading] = useState(true)
+  const [loginModalVisible, setLoginModalVisible] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const segScrollRef = useRef<HTMLDivElement | null>(null)
@@ -203,6 +213,8 @@ function App() {
       if (typeof id === 'string') {
         // video_id - 从 Qdrant 加载
         data = await fetchVideoByVideoId(id)
+        // 记录视频点击
+        recordVideoView(id).catch(() => {})
       } else {
         // transcript_id - 从 PostgreSQL 加载
         data = await fetchTranscriptDetail(id)
@@ -338,10 +350,12 @@ function App() {
     const loadSiteTitle = async () => {
       try {
         const result = await getPublicConfig('site_title')
-        setSiteTitle(result.config_value)
-        document.title = result.config_value
+        const title = result.config_value || result.value || 'HearSight - AI 视频智能分析'
+        setSiteTitle(title)
+        document.title = title
       } catch (error) {
         console.warn('Failed to load site title, using default')
+        document.title = 'HearSight - AI 视频智能分析'
       }
     }
     void loadSiteTitle()
@@ -377,6 +391,7 @@ function App() {
   const handleLoginSuccess = (token: string, userInfo: any) => {
     setCurrentUser(userInfo)
     setIsAuthenticated(true)
+    setLoginModalVisible(false)
   }
 
   // 处理退出登录
@@ -385,21 +400,22 @@ function App() {
     localStorage.removeItem('user_info')
     setIsAuthenticated(false)
     setCurrentUser(null)
-    setCurrentView('gallery')
+    navigate('/')
     message.success('已退出登录')
   }
 
   // 权限检查：进入管理后台时检查权限
   const handleEnterAdmin = () => {
     if (!isAuthenticated) {
-      message.warning('请先登录')
+      // 未登录，跳转到管理后台触发登录页面
+      navigate('/admin')
       return
     }
     if (!currentUser?.is_admin) {
       message.error('需要管理员权限')
       return
     }
-    setCurrentView('admin')
+    navigate('/admin')
   }
 
   // 如果正在加载认证状态，显示加载中
@@ -436,7 +452,7 @@ function App() {
               <Button
                 type="primary"
                 icon={<LeftOutlined />}
-                onClick={() => setCurrentView('gallery')}
+                onClick={() => navigate('/')}
                 style={{
                   background: 'rgba(255, 255, 255, 0.2)',
                   border: '1px solid rgba(255, 255, 255, 0.3)',
@@ -450,7 +466,7 @@ function App() {
               <Button
                 type="primary"
                 icon={<LeftOutlined />}
-                onClick={() => setCurrentView('gallery')}
+                onClick={() => navigate('/')}
                 style={{
                   background: 'rgba(255, 255, 255, 0.2)',
                   border: '1px solid rgba(255, 255, 255, 0.3)',
@@ -460,35 +476,29 @@ function App() {
                 返回主页
               </Button>
             )}
-            {currentView !== 'admin' && (
+            {isAuthenticated ? (
               <>
+                <span style={{ color: 'white', marginRight: 8 }}>
+                  <UserOutlined style={{ marginRight: 4 }} />
+                  {currentUser?.username}
+                </span>
                 <Button
                   type="text"
-                  icon={<SettingOutlined />}
-                  onClick={handleEnterAdmin}
+                  icon={<LogoutOutlined />}
+                  onClick={handleLogout}
                   style={{ color: 'white' }}
                 >
-                  管理后台
-                </Button>
-                <Button
-                  type="text"
-                  icon={<SettingOutlined />}
-                  onClick={() => setAdminSettingsVisible(true)}
-                  style={{ color: 'white' }}
-                >
-                  系统设置
+                  退出
                 </Button>
               </>
-            )}
-            {isAuthenticated && (
+            ) : (
               <Button
                 type="text"
-                icon={<LogoutOutlined />}
-                onClick={handleLogout}
+                icon={<LoginOutlined />}
+                onClick={() => setLoginModalVisible(true)}
                 style={{ color: 'white' }}
-                title={`当前用户：${currentUser?.username}`}
               >
-                退出登录
+                登录
               </Button>
             )}
           </Space>
@@ -499,14 +509,14 @@ function App() {
       <div className="fullscreen-content">
         {currentView === 'admin' ? (
           /* 管理后台页面 */
-          <AdminPanel onClose={() => setCurrentView('gallery')} />
+          <AdminPanel onClose={() => navigate('/')} />
         ) : currentView === 'gallery' ? (
           /* 视频展示页面 */
           <VideoGalleryPage
             onVideoClick={(videoId) => {
               loadTranscriptDetail(videoId)
             }}
-            onSwitchToChat={() => setCurrentView('chat')}
+            onSwitchToChat={() => navigate('/chat')}
           />
         ) : (
           /* 对话分析页面（原来的布局） */
@@ -715,6 +725,17 @@ function App() {
         visible={adminSettingsVisible}
         onClose={() => setAdminSettingsVisible(false)}
       />
+
+      {/* 登录弹窗 */}
+      <Modal
+        title="用户登录"
+        open={loginModalVisible}
+        onCancel={() => setLoginModalVisible(false)}
+        footer={null}
+        width={400}
+      >
+        <LoginPage onLoginSuccess={handleLoginSuccess} inline />
+      </Modal>
     </Layout>
   )
 }

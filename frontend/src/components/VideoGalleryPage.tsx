@@ -9,7 +9,8 @@ import {
   Input,
   App,
   Radio,
-  Space
+  Space,
+  Tabs
 } from 'antd'
 import {
   FolderOutlined,
@@ -18,10 +19,12 @@ import {
   AppstoreOutlined,
   UnorderedListOutlined,
   DownOutlined,
-  RightOutlined
+  RightOutlined,
+  HistoryOutlined,
+  ClockCircleOutlined
 } from '@ant-design/icons'
 import VideoCard from './VideoCard'
-import { fetchQdrantFolders, fetchQdrantVideos } from '../services/api'
+import { fetchQdrantFolders, fetchQdrantVideos, getUserVideoHistory } from '../services/api'
 import { sortVideosNaturally } from '../utils/sorting'
 
 const { Search } = Input
@@ -54,10 +57,31 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
 
+  // 侧边栏标签页
+  const [sidebarTab, setSidebarTab] = useState<'folders' | 'history'>('folders')
+
+  // 浏览历史
+  const [historyVideos, setHistoryVideos] = useState<any[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+
+  // 检查登录状态
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token')
+    setIsLoggedIn(!!token)
+  }, [])
+
   // 加载文件夹列表
   useEffect(() => {
     loadFolders()
   }, [])
+
+  // 切换到浏览历史标签时加载数据
+  useEffect(() => {
+    if (sidebarTab === 'history' && isLoggedIn) {
+      loadHistory()
+    }
+  }, [sidebarTab, isLoggedIn])
 
   // 加载视频列表（初始加载或筛选变化时）
   useEffect(() => {
@@ -73,6 +97,34 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
       message.error(error.message || '加载文件夹失败')
     } finally {
       setLoadingFolders(false)
+    }
+  }
+
+  const loadHistory = async () => {
+    setLoadingHistory(true)
+    try {
+      const result = await getUserVideoHistory(50)
+      // 获取每个视频的详细信息
+      const videoIds = result.videos.map(v => v.video_id)
+      // 从所有视频中查找匹配的
+      const allVideosResult = await fetchQdrantVideos(1, 1000)
+      const videoMap = new Map(allVideosResult.videos.map(v => [v.video_id, v]))
+
+      const historyWithDetails = result.videos.map(h => ({
+        ...h,
+        ...videoMap.get(h.video_id),
+        last_viewed: h.last_viewed
+      })).filter(v => v.video_title || v.topic) // 过滤掉找不到详情的
+
+      setHistoryVideos(historyWithDetails)
+    } catch (error: any) {
+      // 未登录时不显示错误
+      if (error.message !== '未登录') {
+        console.warn('加载浏览历史失败:', error.message)
+      }
+      setHistoryVideos([])
+    } finally {
+      setLoadingHistory(false)
     }
   }
 
@@ -215,33 +267,101 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
     <div className="video-gallery-page">
       {/* 左侧文件夹面板 */}
       <div className="video-gallery-sidebar">
-        <div className="sidebar-header">
-          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>视频分类</h3>
-        </div>
+        <Tabs
+          activeKey={sidebarTab}
+          onChange={(key) => setSidebarTab(key as 'folders' | 'history')}
+          centered
+          size="small"
+          style={{ marginBottom: 0 }}
+          items={[
+            {
+              key: 'folders',
+              label: (
+                <span>
+                  <FolderOutlined />
+                  分类
+                </span>
+              ),
+            },
+            {
+              key: 'history',
+              label: (
+                <span>
+                  <HistoryOutlined />
+                  历史
+                </span>
+              ),
+            },
+          ]}
+        />
         <div className="sidebar-content">
-          {loadingFolders ? (
-            <div style={{ textAlign: 'center', padding: '40px' }}>
-              <Spin />
-            </div>
-          ) : (
-            <div className="folder-list">
-              {/* 全部视频选项 */}
-              <div
-                className={`folder-item ${!selectedFolderId ? 'folder-item-active' : ''}`}
-                onClick={() => handleFolderClick(undefined)}
-              >
-                <FolderOutlined />
-                <span className="folder-name">全部视频</span>
-                <Badge
-                  count={totalVideos}
-                  style={{ backgroundColor: '#52c41a' }}
-                  overflowCount={999}
-                />
+          {sidebarTab === 'folders' ? (
+            // 文件夹列表
+            loadingFolders ? (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <Spin />
               </div>
+            ) : (
+              <div className="folder-list">
+                {/* 全部视频选项 */}
+                <div
+                  className={`folder-item ${!selectedFolderId ? 'folder-item-active' : ''}`}
+                  onClick={() => handleFolderClick(undefined)}
+                >
+                  <FolderOutlined />
+                  <span className="folder-name">全部视频</span>
+                  <Badge
+                    count={totalVideos}
+                    style={{ backgroundColor: '#52c41a' }}
+                    overflowCount={999}
+                  />
+                </div>
 
-              {/* 文件夹树形列表 */}
-              {folderTree.map(folder => renderFolderItem(folder, 0))}
-            </div>
+                {/* 文件夹树形列表 */}
+                {folderTree.map(folder => renderFolderItem(folder, 0))}
+              </div>
+            )
+          ) : (
+            // 浏览历史列表
+            !isLoggedIn ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+                <HistoryOutlined style={{ fontSize: '32px', marginBottom: '12px', display: 'block' }} />
+                <p style={{ margin: 0 }}>登录后可查看浏览历史</p>
+              </div>
+            ) : loadingHistory ? (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <Spin />
+              </div>
+            ) : historyVideos.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+                <ClockCircleOutlined style={{ fontSize: '32px', marginBottom: '12px', display: 'block' }} />
+                <p style={{ margin: 0 }}>暂无浏览记录</p>
+              </div>
+            ) : (
+              <div className="history-list">
+                {historyVideos.map(video => (
+                  <div
+                    key={video.video_id}
+                    className="history-item"
+                    onClick={() => onVideoClick(video.video_id)}
+                  >
+                    <div className="history-title">
+                      {video.video_title || video.topic || '未命名视频'}
+                    </div>
+                    <div className="history-time">
+                      <ClockCircleOutlined style={{ marginRight: 4 }} />
+                      {video.last_viewed ? new Date(video.last_viewed).toLocaleString('zh-CN', {
+                        month: 'numeric',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      }) : ''}
+                      {video.view_count > 1 && ` · 观看${video.view_count}次`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
           )}
         </div>
       </div>

@@ -1,0 +1,149 @@
+// HearSight Database Schema
+// Migrated from Python pg_store.py
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 转写记录表
+model Transcript {
+  id           Int       @id @default(autoincrement())
+  mediaPath    String    @map("media_path")
+  segmentsJson String    @map("segments_json") @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  summaries    Summary[]
+
+  @@index([mediaPath], name: "idx_transcripts_media_path")
+  @@map("transcripts")
+}
+
+// 摘要表
+model Summary {
+  id             Int        @id @default(autoincrement())
+  transcriptId   Int        @map("transcript_id")
+  summariesJson  String     @map("summaries_json") @db.Text
+  createdAt      DateTime   @default(now()) @map("created_at")
+
+  transcript     Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+
+  @@index([transcriptId], name: "idx_summaries_transcript_id")
+  @@map("summaries")
+}
+
+// 任务队列表
+model Job {
+  id         Int       @id @default(autoincrement())
+  url        String
+  status     String    @default("pending")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  startedAt  DateTime? @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  resultJson String?   @map("result_json") @db.Text
+  error      String?   @db.Text
+
+  @@index([status, createdAt(sort: Desc)], name: "idx_jobs_status_created")
+  @@map("jobs")
+}
+
+// 对话历史表
+model ChatHistory {
+  id        Int      @id @default(autoincrement())
+  sessionId String   @map("session_id")
+  userId    Int?     @map("user_id")  // 可选用户关联，未登录时为 null
+  role      String
+  content   String   @db.Text
+  metadata  Json?    @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt(sort: Desc)], name: "idx_chat_history_session_id")
+  @@index([userId], name: "idx_chat_history_user_id")
+  @@map("chat_history")
+}
+
+// 系统配置表
+model SystemConfig {
+  id          Int      @id @default(autoincrement())
+  configKey   String   @unique @map("config_key")
+  configValue String   @map("config_value") @db.Text
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("system_config")
+}
+
+// 用户表
+model User {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique @db.VarChar(50)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  email        String?   @db.VarChar(100)
+  isAdmin      Boolean   @default(false) @map("is_admin")
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastLogin    DateTime? @map("last_login")
+
+  chatHistories ChatHistory[]
+  videoViews    VideoView[]   @relation("UserVideoViews")
+
+  @@index([username], name: "idx_users_username")
+  @@map("users")
+}
+
+// 系统设置表
+model SystemSetting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique @db.VarChar(100)
+  value     String   @db.Text
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}
+
+// 视频思维导图表
+model VideoMindmap {
+  id              Int      @id @default(autoincrement())
+  videoId         String   @unique @map("video_id") @db.VarChar(100)  // Qdrant 中的 video_id
+  videoTitle      String?  @map("video_title") @db.VarChar(500)
+  mindmapMarkdown String   @map("mindmap_markdown") @db.Text
+  version         String   @default("1.0") @db.VarChar(20)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([videoId], name: "idx_video_mindmaps_video_id")
+  @@map("video_mindmaps")
+}
+
+// 视频点击统计表
+model VideoView {
+  id        Int      @id @default(autoincrement())
+  videoId   String   @map("video_id") @db.VarChar(100)  // Qdrant 中的 video_id
+  userId    Int?     @map("user_id")  // 可选用户关联，未登录时为 null
+  viewedAt  DateTime @default(now()) @map("viewed_at")
+  userIp    String?  @map("user_ip") @db.VarChar(50)
+  userAgent String?  @map("user_agent") @db.VarChar(500)
+
+  user      User?    @relation("UserVideoViews", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([videoId], name: "idx_video_views_video_id")
+  @@index([viewedAt], name: "idx_video_views_viewed_at")
+  @@index([userId], name: "idx_video_views_user_id")
+  @@map("video_views")
+}
+
+// 视频点击汇总表（按视频ID汇总）
+model VideoViewCount {
+  id         Int      @id @default(autoincrement())
+  videoId    String   @unique @map("video_id") @db.VarChar(100)
+  viewCount  Int      @default(0) @map("view_count")
+  lastViewed DateTime @default(now()) @map("last_viewed")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("video_view_counts")
+}

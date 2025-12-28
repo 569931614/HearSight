@@ -184,6 +184,17 @@ export const fetchAllSummaries = async (limit = 50, offset = 0): Promise<{ items
 }
 
 /**
+ * 获取认证 headers（如果已登录）
+ */
+const getAuthHeaders = (): Record<string, string> => {
+  const token = localStorage.getItem('auth_token')
+  if (token) {
+    return { 'Authorization': `Bearer ${token}` }
+  }
+  return {}
+}
+
+/**
  * 基于知识库的对话 - 使用 Qdrant RAG
  */
 export const chatWithKnowledge = async (
@@ -200,7 +211,10 @@ export const chatWithKnowledge = async (
 
   const response = await fetch('/api/qdrant/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders()  // 传递用户认证信息（如果已登录）
+    },
     body: JSON.stringify({
       query,
       n_results,
@@ -506,8 +520,10 @@ export const updateAdminConfig = async (
  * 获取单个公开配置（如网站标题）
  */
 export const getPublicConfig = async (config_key: string): Promise<{
-  config_key: string
-  config_value: string
+  config_key?: string
+  config_value?: string
+  key?: string
+  value?: string
 }> => {
   const response = await fetch(`/api/admin/config/${config_key}`)
 
@@ -542,6 +558,89 @@ export const fetchVideoMindMap = async (videoId: string): Promise<MindMapRespons
       throw new Error('该视频暂无思维导图数据')
     }
     throw new Error(`获取思维导图失败：${response.status}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * 记录视频点击
+ */
+export const recordVideoView = async (videoId: string): Promise<{ success: boolean }> => {
+  try {
+    const response = await fetch(`/api/qdrant/videos/${videoId}/view`, {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders()  // 传递用户认证信息（如果已登录）
+      }
+    })
+
+    if (!response.ok) {
+      console.warn('记录视频点击失败:', response.status)
+      return { success: false }
+    }
+
+    return response.json()
+  } catch (error) {
+    console.warn('记录视频点击失败:', error)
+    return { success: false }
+  }
+}
+
+/**
+ * 获取当前用户的对话历史
+ */
+export const getUserChatHistory = async (limit = 50, offset = 0): Promise<{
+  sessions: Array<{
+    session_id: string
+    title: string
+    message_count: number
+    last_updated: string
+  }>
+  total: number
+}> => {
+  const token = localStorage.getItem('auth_token')
+  if (!token) {
+    throw new Error('未登录')
+  }
+
+  const response = await fetch(`/api/auth/me/chat-history?limit=${limit}&offset=${offset}`, {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error('获取对话历史失败')
+  }
+
+  return response.json()
+}
+
+/**
+ * 获取当前用户的视频浏览历史
+ */
+export const getUserVideoHistory = async (limit = 20, offset = 0): Promise<{
+  videos: Array<{
+    video_id: string
+    view_count: number
+    last_viewed: string
+  }>
+  total: number
+}> => {
+  const token = localStorage.getItem('auth_token')
+  if (!token) {
+    throw new Error('未登录')
+  }
+
+  const response = await fetch(`/api/auth/me/video-history?limit=${limit}&offset=${offset}`, {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error('获取浏览历史失败')
   }
 
   return response.json()
