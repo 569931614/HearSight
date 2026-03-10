@@ -17,57 +17,116 @@ const MindMapViewer: React.FC<MindMapViewerProps> = ({
   error = null,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const markmapRef = useRef<Markmap | null>(null)
   const [zoomLevel, setZoomLevel] = useState(100)
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
+
+  // 清理 markdown 内容，去除代码块标记
+  const cleanMarkdown = (md: string | null): string | null => {
+    if (!md) return md
+
+    // 去除 ```markdown 和 ``` 代码块标记
+    let cleaned = md.trim()
+
+    // 匹配 ```markdown 开头和 ``` 结尾
+    if (cleaned.startsWith('```markdown') || cleaned.startsWith('```md')) {
+      cleaned = cleaned.replace(/^```(?:markdown|md)\s*\n/, '')
+    } else if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```\s*\n/, '')
+    }
+
+    if (cleaned.endsWith('```')) {
+      cleaned = cleaned.replace(/\n```\s*$/, '')
+    }
+
+    const result = cleaned.trim()
+    return result
+  }
+
+  // 初始化容器尺寸
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const updateSize = () => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          setDimensions({ width: rect.width, height: rect.height })
+        }
+      }
+    }
+
+    // 初始设置
+    updateSize()
+
+    // 监听尺寸变化
+    const resizeObserver = new ResizeObserver(updateSize)
+    resizeObserver.observe(containerRef.current)
+
+    return () => resizeObserver.disconnect()
+  }, [])
 
   // 渲染思维导图
   useEffect(() => {
+    // 等待尺寸初始化
+    if (dimensions.width === 0 || dimensions.height === 0) {
+      console.log('Waiting for dimensions to be initialized')
+      return
+    }
+
     if (!markdown || !svgRef.current) {
       return
     }
 
     const svg = svgRef.current
+    const cleanedMarkdown = cleanMarkdown(markdown)
 
-    // 确保 SVG 容器有有效的尺寸
-    const checkAndRender = () => {
-      const rect = svg.getBoundingClientRect()
-      if (rect.width === 0 || rect.height === 0) {
-        // 容器尺寸还没准备好，稍后再试
-        setTimeout(checkAndRender, 50)
-        return
-      }
-
-      try {
-        const transformer = new Transformer()
-        const { root, features } = transformer.transform(markdown)
-
-        // 加载必要的资源
-        const { styles, scripts } = transformer.getUsedAssets(features)
-        if (styles) loadCSS(styles)
-        if (scripts) loadJS(scripts, { getMarkmap: () => Markmap })
-
-        // 创建或更新 markmap 实例
-        if (markmapRef.current) {
-          markmapRef.current.setData(root)
-          markmapRef.current.fit()
-        } else {
-          markmapRef.current = Markmap.create(svg, {
-            duration: 300,
-            zoom: true,
-            pan: true,
-          }, root)
-          markmapRef.current.fit()
-        }
-
-        setZoomLevel(100)
-      } catch (err) {
-        console.error('Failed to render mind map:', err)
-      }
+    if (!cleanedMarkdown) {
+      console.warn('Cleaned markdown is empty')
+      return
     }
 
-    // 开始检查和渲染
-    checkAndRender()
-  }, [markdown])
+    try {
+      console.log('Starting markmap transformation with dimensions:', dimensions)
+      const transformer = new Transformer()
+      const { root, features } = transformer.transform(cleanedMarkdown)
+
+      console.log('Markmap transformation successful, loading assets...')
+      // 加载必要的资源
+      const { styles, scripts } = transformer.getUsedAssets(features)
+      if (styles) loadCSS(styles)
+      if (scripts) loadJS(scripts, { getMarkmap: () => Markmap })
+
+      console.log('Creating markmap instance...')
+      // 销毁旧实例
+      if (markmapRef.current) {
+        markmapRef.current.destroy?.()
+      }
+
+      // 创建新实例
+      markmapRef.current = Markmap.create(svg, {
+        duration: 300,
+        zoom: true,
+        pan: true,
+      }, root)
+
+      console.log('Fitting markmap to viewport...')
+      markmapRef.current.fit()
+      setZoomLevel(100)
+      console.log('Markmap render complete!')
+    } catch (err) {
+      console.error('Failed to render mind map:', err)
+    }
+
+    // 清理函数
+    return () => {
+      if (markmapRef.current) {
+        markmapRef.current.destroy?.()
+        markmapRef.current = null
+      }
+    }
+  }, [markdown, dimensions])
 
   // 缩放控制
   const handleZoomIn = () => {
@@ -224,15 +283,18 @@ const MindMapViewer: React.FC<MindMapViewerProps> = ({
   }
 
   return (
-    <div style={{
-      position: 'relative',
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      overflow: 'hidden',
-      background: '#fafafa'
-    }}>
+    <div
+      ref={containerRef}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        background: '#fafafa'
+      }}
+    >
       {/* 工具栏 */}
       <div
         style={{
@@ -282,15 +344,17 @@ const MindMapViewer: React.FC<MindMapViewerProps> = ({
       </div>
 
       {/* 思维导图容器 */}
-      <svg
-        ref={svgRef}
-        style={{
-          width: '100%',
-          height: '100%',
-          cursor: 'grab',
-          display: 'block'
-        }}
-      />
+      {dimensions.width > 0 && dimensions.height > 0 && (
+        <svg
+          ref={svgRef}
+          width={dimensions.width}
+          height={dimensions.height}
+          style={{
+            cursor: 'grab',
+            display: 'block'
+          }}
+        />
+      )}
     </div>
   )
 }

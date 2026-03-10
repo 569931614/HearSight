@@ -910,6 +910,7 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
                 ) : (
                   <div style={{ height: '500px', border: '1px solid #f0f0f0', borderRadius: 4 }}>
                     <MindMapViewer
+                      videoId={selectedVideo?.video_id || ''}
                       markdown={mindmapContent}
                       loading={false}
                       error={null}
