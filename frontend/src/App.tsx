@@ -680,7 +680,10 @@ function App() {
       <Modal
         title="视频播放"
         open={videoModalVisible}
-        onCancel={() => setVideoModalVisible(false)}
+        onCancel={() => {
+          videoRef.current?.pause()
+          setVideoModalVisible(false)
+        }}
         width="90%"
         style={{ top: 20 }}
         footer={null}

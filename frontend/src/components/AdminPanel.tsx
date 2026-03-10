@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Tabs, Card, Table, Button, Space, Modal, Form, Input, Switch, message, Statistic, Row, Col, Popconfirm, Tag, Tooltip, Drawer, Select } from 'antd'
-import { UserOutlined, VideoCameraOutlined, DashboardOutlined, EditOutlined, DeleteOutlined, PlusOutlined, SettingOutlined, EyeOutlined, ReloadOutlined, FileTextOutlined, FolderOutlined, UploadOutlined } from '@ant-design/icons'
+import { UserOutlined, VideoCameraOutlined, DashboardOutlined, EditOutlined, DeleteOutlined, PlusOutlined, SettingOutlined, EyeOutlined, ReloadOutlined, FileTextOutlined, FolderOutlined, UploadOutlined, LinkOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import MindMapViewer from './MindMapViewer'
 
@@ -320,6 +320,8 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
       configForm.setFieldsValue({
         site_title: configData.configs?.site_title || 'HearSight - AI 视频智能分析',
         mindmap_prompt: configData.configs?.mindmap_prompt || '',
+        oss_manager_url: configData.configs?.oss_manager_url || '',
+        oss_manager_key: configData.configs?.oss_manager_key || '',
         ...settingData.settings,
       })
     } catch (error: any) {
@@ -603,7 +605,7 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
 
       // 保存配置
       for (const [key, value] of Object.entries(values)) {
-        if (key === 'site_title' || key === 'mindmap_prompt') {
+        if (key === 'site_title' || key === 'mindmap_prompt' || key === 'oss_manager_url' || key === 'oss_manager_key') {
           await updateConfig(key, value as string)
         } else {
           await updateSetting(key, value as string)
@@ -611,6 +613,7 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
       }
 
       message.success('配置已保存')
+      loadConfigs()
 
       // 更新网站标题
       if (values.site_title) {
@@ -624,7 +627,31 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
 
   return (
     <div style={{ padding: '24px', width: '100%', height: '100%', overflow: 'auto', background: '#f5f5f5' }}>
-      <Card style={{ width: '100%' }} title={<span style={{ fontSize: '20px', fontWeight: 'bold' }}>管理后台</span>} extra={<Button onClick={onClose}>返回</Button>}>
+      <Card
+        style={{ width: '100%' }}
+        title={<span style={{ fontSize: '20px', fontWeight: 'bold' }}>管理后台</span>}
+        extra={
+          <Space>
+            <Button
+              type="primary"
+              icon={<LinkOutlined />}
+              onClick={() => {
+                const url = configForm.getFieldValue('oss_manager_url') || configs.oss_manager_url
+                const key = configForm.getFieldValue('oss_manager_key') || configs.oss_manager_key
+                if (!url || !key) {
+                  message.warning('请先在「系统配置」中配置 OSS 管理后台地址和密钥')
+                  setActiveTab('config')
+                  return
+                }
+                window.open(`${url}/auth/access/?key=${encodeURIComponent(key)}`, '_blank')
+              }}
+            >
+              访问 OSS 管理后台
+            </Button>
+            <Button onClick={onClose}>返回</Button>
+          </Space>
+        }
+      >
         <Tabs activeKey={activeTab} onChange={setActiveTab}>
           {/* 系统统计 */}
           <TabPane tab={<span><DashboardOutlined /> 系统概览</span>} key="stats">
@@ -695,6 +722,15 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
               <Card title="基础设置" style={{ marginBottom: '16px' }}>
                 <Form.Item label="网站标题" name="site_title" help="显示在浏览器标签和页面顶部">
                   <Input placeholder="HearSight - AI 视频智能分析" />
+                </Form.Item>
+              </Card>
+
+              <Card title="OSS 管理后台" style={{ marginBottom: '16px' }}>
+                <Form.Item label="管理后台地址" name="oss_manager_url" help="OSS 管理后台的访问地址，例如 http://localhost:8080">
+                  <Input placeholder="http://localhost:8080" />
+                </Form.Item>
+                <Form.Item label="访问密钥" name="oss_manager_key" help="配置在 OSS 管理后台的免登录访问密钥（ACCESS_KEY）">
+                  <Input.Password placeholder="请输入访问密钥" />
                 </Form.Item>
               </Card>
 

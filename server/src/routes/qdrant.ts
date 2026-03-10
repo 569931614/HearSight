@@ -148,7 +148,7 @@ export async function qdrantRoutes(fastify: FastifyInstance) {
           userId,  // 可选用户关联
           role: 'user',
           content: body.query,
-          metadata: null,
+          metadata: undefined,
         },
       });
 

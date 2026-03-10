@@ -51,7 +51,7 @@ function naturalSort(a: string, b: string): number {
 /**
  * 对视频列表进行自然排序
  */
-function sortVideosNaturally<T extends { video_title?: string; topic?: string }>(videos: T[]): T[] {
+function sortVideosNaturally<T extends { video_title?: string | null; topic?: string | null }>(videos: T[]): T[] {
   return [...videos].sort((a, b) => {
     const titleA = a.video_title || a.topic || '';
     const titleB = b.video_title || b.topic || '';
