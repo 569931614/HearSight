@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react'
 import {
   Empty,
   Spin,
-  Collapse,
   Badge,
   Button,
   Pagination,
@@ -10,7 +9,9 @@ import {
   App,
   Radio,
   Space,
-  Tabs
+  Tag,
+  Drawer,
+  Popover
 } from 'antd'
 import {
   FolderOutlined,
@@ -21,7 +22,10 @@ import {
   DownOutlined,
   RightOutlined,
   HistoryOutlined,
-  ClockCircleOutlined
+  ClockCircleOutlined,
+  FireOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined
 } from '@ant-design/icons'
 import VideoCard from './VideoCard'
 import { fetchQdrantFolders, fetchQdrantVideos, getUserVideoHistory } from '../services/api'
@@ -32,11 +36,15 @@ const { Search } = Input
 interface VideoGalleryPageProps {
   onVideoClick: (videoId: string) => void
   onSwitchToChat: () => void
+  historyPanelVisible?: boolean
+  onHistoryPanelClose?: () => void
 }
 
 const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
   onVideoClick,
-  onSwitchToChat
+  onSwitchToChat,
+  historyPanelVisible = false,
+  onHistoryPanelClose
 }) => {
   const { message } = App.useApp()
 
@@ -55,15 +63,20 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
   // 筛选状态
   const [selectedFolderId, setSelectedFolderId] = useState<string | undefined>(undefined)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchInputValue, setSearchInputValue] = useState('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
-
-  // 侧边栏标签页
-  const [sidebarTab, setSidebarTab] = useState<'folders' | 'history'>('folders')
 
   // 浏览历史
   const [historyVideos, setHistoryVideos] = useState<any[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+
+  // 热门词条
+  const HOT_TAGS_MAIN = ['解剖', '病理', '妇产', '医学考研', '医学真题']
+  const HOT_TAGS_MORE = ['内科', '外科', '儿科', '神经', '影像', '心血管', '肿瘤', '骨科', '急救', '护理']
+
+  // 侧边栏折叠
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   // 检查登录状态
   useEffect(() => {
@@ -76,12 +89,12 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
     loadFolders()
   }, [])
 
-  // 切换到浏览历史标签时加载数据
+  // 历史面板打开时加载数据
   useEffect(() => {
-    if (sidebarTab === 'history' && isLoggedIn) {
+    if (historyPanelVisible && isLoggedIn) {
       loadHistory()
     }
-  }, [sidebarTab, isLoggedIn])
+  }, [historyPanelVisible, isLoggedIn])
 
   // 加载视频列表（初始加载或筛选变化时）
   useEffect(() => {
@@ -156,7 +169,13 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
 
   const handleSearch = (value: string) => {
     setSearchQuery(value)
-    // 搜索功能已实现：通过 filteredVideos 自动过滤
+    setSearchInputValue(value)
+  }
+
+  const handleHotTagClick = (tag: string) => {
+    const newVal = searchQuery === tag ? '' : tag
+    setSearchQuery(newVal)
+    setSearchInputValue(newVal)
   }
 
   // 切换文件夹展开/折叠状态
@@ -266,38 +285,10 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
   return (
     <div className="video-gallery-page">
       {/* 左侧文件夹面板 */}
-      <div className="video-gallery-sidebar">
-        <Tabs
-          activeKey={sidebarTab}
-          onChange={(key) => setSidebarTab(key as 'folders' | 'history')}
-          centered
-          size="small"
-          style={{ marginBottom: 0 }}
-          items={[
-            {
-              key: 'folders',
-              label: (
-                <span>
-                  <FolderOutlined />
-                  分类
-                </span>
-              ),
-            },
-            {
-              key: 'history',
-              label: (
-                <span>
-                  <HistoryOutlined />
-                  历史
-                </span>
-              ),
-            },
-          ]}
-        />
-        <div className="sidebar-content">
-          {sidebarTab === 'folders' ? (
-            // 文件夹列表
-            loadingFolders ? (
+      <div className={`video-gallery-sidebar ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        {!sidebarCollapsed && (
+          <div className="sidebar-content">
+            {loadingFolders ? (
               <div style={{ textAlign: 'center', padding: '40px' }}>
                 <Spin />
               </div>
@@ -320,103 +311,172 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
                 {/* 文件夹树形列表 */}
                 {folderTree.map(folder => renderFolderItem(folder, 0))}
               </div>
-            )
-          ) : (
-            // 浏览历史列表
-            !isLoggedIn ? (
-              <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
-                <HistoryOutlined style={{ fontSize: '32px', marginBottom: '12px', display: 'block' }} />
-                <p style={{ margin: 0 }}>登录后可查看浏览历史</p>
-              </div>
-            ) : loadingHistory ? (
-              <div style={{ textAlign: 'center', padding: '40px' }}>
-                <Spin />
-              </div>
-            ) : historyVideos.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
-                <ClockCircleOutlined style={{ fontSize: '32px', marginBottom: '12px', display: 'block' }} />
-                <p style={{ margin: 0 }}>暂无浏览记录</p>
-              </div>
-            ) : (
-              <div className="history-list">
-                {historyVideos.map(video => (
-                  <div
-                    key={video.video_id}
-                    className="history-item"
-                    onClick={() => onVideoClick(video.video_id)}
-                  >
-                    <div className="history-title">
-                      {video.video_title || video.topic || '未命名视频'}
-                    </div>
-                    <div className="history-time">
-                      <ClockCircleOutlined style={{ marginRight: 4 }} />
-                      {video.last_viewed ? new Date(video.last_viewed).toLocaleString('zh-CN', {
-                        month: 'numeric',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      }) : ''}
-                      {video.view_count > 1 && ` · 观看${video.view_count}次`}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
-          )}
+            )}
+          </div>
+        )}
+
+        {/* 底部收起/展开按钮 */}
+        <div
+          className="sidebar-collapse-btn"
+          onClick={() => setSidebarCollapsed(v => !v)}
+        >
+          {sidebarCollapsed
+            ? <MenuUnfoldOutlined style={{ marginRight: 6 }} />
+            : <MenuFoldOutlined style={{ marginRight: 6 }} />
+          }
+          {!sidebarCollapsed && <span>收起菜单</span>}
         </div>
       </div>
 
+      {/* 历史记录抽屉 */}
+      <Drawer
+        title={
+          <span>
+            <HistoryOutlined style={{ marginRight: 8, color: '#764ba2' }} />
+            浏览历史
+          </span>
+        }
+        placement="left"
+        width={320}
+        open={historyPanelVisible}
+        onClose={onHistoryPanelClose}
+        styles={{ body: { padding: 0 } }}
+      >
+        {!isLoggedIn ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#999' }}>
+            <HistoryOutlined style={{ fontSize: '40px', marginBottom: '16px', display: 'block', color: '#d9d9d9' }} />
+            <p style={{ margin: 0 }}>登录后可查看浏览历史</p>
+          </div>
+        ) : loadingHistory ? (
+          <div style={{ textAlign: 'center', padding: '60px' }}>
+            <Spin />
+          </div>
+        ) : historyVideos.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#999' }}>
+            <ClockCircleOutlined style={{ fontSize: '40px', marginBottom: '16px', display: 'block', color: '#d9d9d9' }} />
+            <p style={{ margin: 0 }}>暂无浏览记录</p>
+          </div>
+        ) : (
+          <div className="history-list">
+            {historyVideos.map(video => (
+              <div
+                key={video.video_id}
+                className="history-item"
+                onClick={() => { onVideoClick(video.video_id); onHistoryPanelClose?.() }}
+              >
+                <div className="history-title">
+                  {video.video_title || video.topic || '未命名视频'}
+                </div>
+                <div className="history-time">
+                  <ClockCircleOutlined style={{ marginRight: 4 }} />
+                  {video.last_viewed ? new Date(video.last_viewed).toLocaleString('zh-CN', {
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  }) : ''}
+                  {video.view_count > 1 && ` · 观看${video.view_count}次`}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Drawer>
+
       {/* 右侧主内容区域 */}
       <div className="video-gallery-main">
-        {/* 顶部工具栏 */}
-        <div className="gallery-toolbar">
-          <div className="toolbar-left">
-            <Search
-              placeholder="搜索视频标题..."
-              allowClear
-              enterButton={<SearchOutlined />}
-              onSearch={handleSearch}
-              style={{ width: 300 }}
-            />
-          </div>
-          <div className="toolbar-right">
-            <Space>
-              <Radio.Group
-                value={viewMode}
-                onChange={(e) => setViewMode(e.target.value)}
-                buttonStyle="solid"
-                size="middle"
-              >
-                <Radio.Button value="grid">
-                  <AppstoreOutlined /> 网格
-                </Radio.Button>
-                <Radio.Button value="list">
-                  <UnorderedListOutlined /> 列表
-                </Radio.Button>
-              </Radio.Group>
-              <Button
-                type="primary"
-                icon={<MessageOutlined />}
-                onClick={onSwitchToChat}
-                size="large"
-                style={{
-                  height: '40px',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  borderRadius: '8px',
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  border: 'none',
-                  boxShadow: '0 2px 8px rgba(102, 126, 234, 0.3)'
+        {/* 顶部区域：搜索栏 + 热门词条 + 视频网格 一体化容器 */}
+        <div className="gallery-unified-area">
+          {/* 工具栏行 */}
+          <div className="gallery-toolbar">
+            <div className="toolbar-left">
+              <Search
+                placeholder="搜索视频标题..."
+                allowClear
+                value={searchInputValue}
+                onChange={(e) => {
+                  setSearchInputValue(e.target.value)
+                  if (!e.target.value) setSearchQuery('')
                 }}
-              >
-                AI 问答
-              </Button>
-            </Space>
+                enterButton={<SearchOutlined />}
+                onSearch={handleSearch}
+                style={{ width: 300 }}
+              />
+            </div>
+            <div className="toolbar-right">
+              <Space>
+                <Radio.Group
+                  value={viewMode}
+                  onChange={(e) => setViewMode(e.target.value)}
+                  buttonStyle="solid"
+                  size="middle"
+                >
+                  <Radio.Button value="grid">
+                    <AppstoreOutlined /> 网格
+                  </Radio.Button>
+                  <Radio.Button value="list">
+                    <UnorderedListOutlined /> 列表
+                  </Radio.Button>
+                </Radio.Group>
+                <Button
+                  type="primary"
+                  icon={<MessageOutlined />}
+                  onClick={onSwitchToChat}
+                  size="large"
+                  style={{
+                    height: '40px',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    border: 'none',
+                    boxShadow: '0 2px 8px rgba(102, 126, 234, 0.3)'
+                  }}
+                >
+                  AI 问答
+                </Button>
+              </Space>
+            </div>
           </div>
-        </div>
 
-        {/* 视频内容区域 */}
-        <div className="gallery-content">
+          {/* 热门词条行 */}
+          <div className="hot-tags-bar">
+            <FireOutlined className="hot-tags-icon" />
+            <span className="hot-tags-label">热门词条：</span>
+            {HOT_TAGS_MAIN.map(tag => (
+              <Tag
+                key={tag}
+                className={`hot-tag ${searchQuery === tag ? 'hot-tag-active' : ''}`}
+                onClick={() => handleHotTagClick(tag)}
+              >
+                {tag}
+              </Tag>
+            ))}
+            <Popover
+              trigger="click"
+              placement="bottomLeft"
+              content={
+                <div className="hot-tags-more-popover">
+                  {HOT_TAGS_MORE.map(tag => (
+                    <Tag
+                      key={tag}
+                      className={`hot-tag ${searchQuery === tag ? 'hot-tag-active' : ''}`}
+                      onClick={() => handleHotTagClick(tag)}
+                      style={{ marginBottom: 6 }}
+                    >
+                      {tag}
+                    </Tag>
+                  ))}
+                </div>
+              }
+              title={<span style={{ fontSize: 13, color: '#595959' }}>更多词条</span>}
+            >
+              <a className="hot-tags-more">更多 ▾</a>
+            </Popover>
+          </div>
+
+          {/* 视频内容区域 */}
+          <div className="gallery-content">
           {loadingVideos ? (
             <Spin size="large" tip="加载视频中...">
               <div style={{
@@ -467,7 +527,8 @@ const VideoGalleryPage: React.FC<VideoGalleryPageProps> = ({
               )}
             </>
           )}
-        </div>
+          </div>
+        </div>{/* /gallery-unified-area */}
       </div>
     </div>
   )

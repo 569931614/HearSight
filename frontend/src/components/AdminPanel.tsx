@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Tabs, Card, Table, Button, Space, Modal, Form, Input, Switch, message, Statistic, Row, Col, Popconfirm, Tag, Tooltip, Drawer, Select } from 'antd'
+import { Tabs, Card, Table, Button, Space, Modal, Form, Input, Switch, App, Statistic, Row, Col, Popconfirm, Tag, Tooltip, Drawer, Select, Upload } from 'antd'
 import { UserOutlined, VideoCameraOutlined, DashboardOutlined, EditOutlined, DeleteOutlined, PlusOutlined, SettingOutlined, EyeOutlined, ReloadOutlined, FileTextOutlined, FolderOutlined, UploadOutlined, LinkOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import MindMapViewer from './MindMapViewer'
@@ -87,6 +87,7 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ onClose }: AdminPanelProps) {
+  const { message } = App.useApp()
   const [activeTab, setActiveTab] = useState('stats')
   const [stats, setStats] = useState<any>(null)
 
@@ -138,7 +139,12 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
   const [configs, setConfigs] = useState<Record<string, string>>({})
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [configLoading, setConfigLoading] = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
   const [configForm] = Form.useForm()
+
+  // Logo 上传
+  const [logoBase64, setLogoBase64] = useState<string>('')
+  const [logoChanged, setLogoChanged] = useState(false)
 
   // 加载系统统计
   const loadStats = async () => {
@@ -324,6 +330,13 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
         oss_manager_key: configData.configs?.oss_manager_key || '',
         ...settingData.settings,
       })
+
+      // 加载 Logo
+      if (configData.configs?.site_logo) {
+        setLogoBase64(configData.configs.site_logo)
+      } else {
+        setLogoBase64('')
+      }
     } catch (error: any) {
       message.error(error.message)
     } finally {
@@ -600,6 +613,7 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
 
   // 保存系统配置
   const handleSaveConfig = async () => {
+    setSaveLoading(true)
     try {
       const values = await configForm.validateFields()
 
@@ -612,6 +626,12 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
         }
       }
 
+      // 保存 Logo（单独处理，不在表单 values 里）
+      if (logoChanged) {
+        await updateConfig('site_logo', logoBase64)
+        setLogoChanged(false)
+      }
+
       message.success('配置已保存')
       loadConfigs()
 
@@ -622,6 +642,8 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
     } catch (error: any) {
       if (error.errorFields) return
       message.error(error.message)
+    } finally {
+      setSaveLoading(false)
     }
   }
 
@@ -723,6 +745,56 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
                 <Form.Item label="网站标题" name="site_title" help="显示在浏览器标签和页面顶部">
                   <Input placeholder="HearSight - AI 视频智能分析" />
                 </Form.Item>
+                <Form.Item
+                  label="网站 Logo"
+                  help="显示在页面左上角圆形图标处，建议使用正方形图片（PNG/JPG/SVG），最大 500KB"
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    {/* 预览 */}
+                    <div style={{
+                      width: 64, height: 64, borderRadius: 8,
+                      border: '1px solid #d9d9d9', background: '#fafafa',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      overflow: 'hidden', flexShrink: 0
+                    }}>
+                      {logoBase64
+                        ? <img src={logoBase64} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        : <span style={{ color: '#bfbfbf', fontSize: 12 }}>无图标</span>
+                      }
+                    </div>
+                    {/* 操作按钮 */}
+                    <Space direction="vertical" size={8}>
+                      <Upload
+                        accept="image/*"
+                        showUploadList={false}
+                        beforeUpload={(file) => {
+                          if (file.size > 500 * 1024) {
+                            message.error('图片大小不能超过 500KB')
+                            return false
+                          }
+                          const reader = new FileReader()
+                          reader.onload = (e) => {
+                            setLogoBase64(e.target?.result as string)
+                            setLogoChanged(true)
+                          }
+                          reader.readAsDataURL(file)
+                          return false
+                        }}
+                      >
+                        <Button icon={<UploadOutlined />}>上传图片</Button>
+                      </Upload>
+                      {logoBase64 && (
+                        <Button
+                          size="small"
+                          danger
+                          onClick={() => { setLogoBase64(''); setLogoChanged(true) }}
+                        >
+                          移除图标
+                        </Button>
+                      )}
+                    </Space>
+                  </div>
+                </Form.Item>
               </Card>
 
               <Card title="OSS 管理后台" style={{ marginBottom: '16px' }}>
@@ -748,7 +820,7 @@ export default function AdminPanel({ onClose }: AdminPanelProps) {
               </Card>
 
               <Form.Item>
-                <Button type="primary" onClick={handleSaveConfig} loading={configLoading}>保存配置</Button>
+                <Button type="primary" onClick={handleSaveConfig} loading={saveLoading}>保存配置</Button>
               </Form.Item>
             </Form>
           </TabPane>

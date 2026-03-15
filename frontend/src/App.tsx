@@ -1,8 +1,8 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './index.css'
-import { Layout, Typography, Button, Space, Tag, Modal, App as AntdApp } from 'antd'
-import { CloseOutlined, LeftOutlined, MessageOutlined, SettingOutlined, LogoutOutlined, UserOutlined, LoginOutlined } from '@ant-design/icons'
+import { Layout, Typography, Button, Space, Tag, Modal, Divider, App as AntdApp } from 'antd'
+import { CloseOutlined, LeftOutlined, MessageOutlined, SettingOutlined, LogoutOutlined, UserOutlined, LoginOutlined, HistoryOutlined, BookOutlined, EyeFilled } from '@ant-design/icons'
 import { extractFilename, seekVideoTo } from './utils'
 import { fetchTranscriptDetail, fetchAllSummaries, fetchQdrantVideos, getPublicConfig, fetchTranscriptIdByPath, fetchVideoByVideoId, fetchVideoMindMap, getCurrentUser, recordVideoView } from './services/api'
 import type { Segment, SummaryMeta, TranscriptDetailResponse } from './types'
@@ -15,7 +15,7 @@ import VideoGalleryPage from './components/VideoGalleryPage'
 import AdminPanel from './components/AdminPanel'
 import LoginPage from './components/LoginPage'
 
-const { Header, Footer } = Layout
+const { Header } = Layout
 const { Title } = Typography
 
 interface ChatSession {
@@ -72,6 +72,10 @@ function App() {
   // 管理员设置
   const [adminSettingsVisible, setAdminSettingsVisible] = useState(false)
   const [siteTitle, setSiteTitle] = useState('HearSight - AI 视频智能分析')
+  const [siteLogoUrl, setSiteLogoUrl] = useState<string>('')
+
+  // 历史记录面板
+  const [historyPanelVisible, setHistoryPanelVisible] = useState(false)
 
   // 认证状态
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -345,20 +349,30 @@ function App() {
     void loadSummaries()
   }, [])
 
-  // 加载网站标题
+  // 加载网站标题和 Logo
   useEffect(() => {
-    const loadSiteTitle = async () => {
+    const loadSiteConfig = async () => {
       try {
-        const result = await getPublicConfig('site_title')
-        const title = result.config_value || result.value || 'HearSight - AI 视频智能分析'
-        setSiteTitle(title)
-        document.title = title
+        const [titleResult, logoResult] = await Promise.allSettled([
+          getPublicConfig('site_title'),
+          getPublicConfig('site_logo'),
+        ])
+        if (titleResult.status === 'fulfilled') {
+          const title = titleResult.value.config_value || titleResult.value.value || 'HearSight - AI 视频智能分析'
+          setSiteTitle(title)
+          document.title = title
+        } else {
+          document.title = 'HearSight - AI 视频智能分析'
+        }
+        if (logoResult.status === 'fulfilled') {
+          setSiteLogoUrl(logoResult.value.config_value || logoResult.value.value || '')
+        }
       } catch (error) {
-        console.warn('Failed to load site title, using default')
+        console.warn('Failed to load site config, using default')
         document.title = 'HearSight - AI 视频智能分析'
       }
     }
-    void loadSiteTitle()
+    void loadSiteConfig()
   }, [])
 
   // 检查登录状态
@@ -444,41 +458,45 @@ function App() {
       {/* 顶部工具栏 */}
       <Header className="fullscreen-header">
         <div className="header-left">
+          <div className="header-logo-icon">
+            {siteLogoUrl
+              ? <img src={siteLogoUrl} style={{ width: 28, height: 28, objectFit: 'contain', borderRadius: '50%' }} />
+              : <EyeFilled style={{ fontSize: '20px', color: 'white' }} />
+            }
+          </div>
           <Title level={3} style={{ margin: 0, color: 'white' }}>{siteTitle}</Title>
         </div>
         <div className="header-right">
-          <Space>
-            {currentView === 'chat' && (
-              <Button
-                type="primary"
-                icon={<LeftOutlined />}
-                onClick={() => navigate('/')}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.2)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  color: 'white'
-                }}
-              >
-                返回主页
-              </Button>
+          <Space align="center" size={0}>
+            {(currentView === 'chat' || currentView === 'admin') && (
+              <>
+                <Button
+                  type="text"
+                  icon={<LeftOutlined />}
+                  onClick={() => navigate('/')}
+                  style={{ color: 'white' }}
+                >
+                  返回主页
+                </Button>
+                <Divider type="vertical" style={{ borderColor: 'rgba(255,255,255,0.3)', margin: '0 4px' }} />
+              </>
             )}
-            {currentView === 'admin' && (
-              <Button
-                type="primary"
-                icon={<LeftOutlined />}
-                onClick={() => navigate('/')}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.2)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  color: 'white'
-                }}
-              >
-                返回主页
-              </Button>
+            {currentView === 'gallery' && (
+              <>
+                <Button
+                  type="text"
+                  icon={<HistoryOutlined />}
+                  onClick={() => setHistoryPanelVisible(true)}
+                  style={{ color: 'white' }}
+                >
+                  历史
+                </Button>
+                <Divider type="vertical" style={{ borderColor: 'rgba(255,255,255,0.3)', margin: '0 4px' }} />
+              </>
             )}
             {isAuthenticated ? (
               <>
-                <span style={{ color: 'white', marginRight: 8 }}>
+                <span style={{ color: 'white', marginRight: 4 }}>
                   <UserOutlined style={{ marginRight: 4 }} />
                   {currentUser?.username}
                 </span>
@@ -493,10 +511,8 @@ function App() {
               </>
             ) : (
               <Button
-                type="text"
-                icon={<LoginOutlined />}
                 onClick={() => setLoginModalVisible(true)}
-                style={{ color: 'white' }}
+                className="header-login-btn"
               >
                 登录
               </Button>
@@ -517,6 +533,8 @@ function App() {
               loadTranscriptDetail(videoId)
             }}
             onSwitchToChat={() => navigate('/chat')}
+            historyPanelVisible={historyPanelVisible}
+            onHistoryPanelClose={() => setHistoryPanelVisible(false)}
           />
         ) : (
           /* 对话分析页面（原来的布局） */
@@ -667,14 +685,6 @@ function App() {
         )}
       </div>
       
-      {/* 底部状态栏 */}
-      <Footer className="fullscreen-footer">
-        <div className="footer-content">
-          {videoSrc && <Tag color="green">视频已加载</Tag>}
-          {loading && <Tag color="blue">处理中...</Tag>}
-          {segments.length > 0 && <Tag>{segments.length} 个分句</Tag>}
-        </div>
-      </Footer>
 
       {/* 视频播放器弹窗 */}
       <Modal
